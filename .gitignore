@@ -1,0 +1,8 @@
+build/
+dist/
+toolchain/
+__pycache__/
+*.log
+*.asi
+*.tmp
+*.bak

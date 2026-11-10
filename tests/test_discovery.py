@@ -1,0 +1,26 @@
+import ctypes,pathlib
+root=pathlib.Path('build/discovery-tests').resolve();root.mkdir(exist_ok=True)
+(root/'NewUI.ini').write_text('[General]\nActivationKeyVK=118\n[Menu]\nHotkey=Ctrl+7\nRequireAlt=1\n[Gameplay]\nStanceCycleKey=F3\nHotkeyToggleEffect=F10\n')
+(root/'ToggleOnly.ini').write_text('[General]\nHotkeyToggleEffect=F10\n[Hotkeys]\nToggleKey=121\nDisableKey=122\n')
+(root/'Ghost.ini').write_text('[Menu]\nHotkey=F6\n')
+(root/'MissingUI.ini').write_text('[Menu]\nEnabled=1\n')
+(root/'Disabled.ini').write_text('[Menu]\nHotkey=None\n')
+(root/'Nested').mkdir(exist_ok=True);(root/'Nested/startup.ini').write_text('[Startup]\nInstantResumeHotkey=Home\n[Menu]\nHotkey=F5\n')
+m=ctypes.WinDLL(str(pathlib.Path('dist/ModActivator.asi').resolve()));assert m.ModActivatorSelfTest()==0
+fn=m.ModActivatorDiscoveryTest;fn.argtypes=[ctypes.c_char_p,ctypes.c_char_p,ctypes.c_char_p,ctypes.c_int]
+def scan(path,mods):
+ b=ctypes.create_string_buffer(100000);r=fn((str(path)+'\\').encode(),mods.encode(),b,len(b));assert r>=0,r;return b.value.decode()
+r=scan(root,'NewUI.asi;ToggleOnly.asi;MissingUI.asi;Disabled.asi;Nested.asi');print(r)
+assert len(r.strip().splitlines())==2
+assert 'NewUI.asi|NewUI.ini|Menu|Hotkey|18,17,55,' in r
+assert 'Nested.asi|Nested/startup.ini|Menu|Hotkey|116,' in r
+assert all(x not in r for x in ['Ghost','ToggleOnly','MissingUI','Disabled','Stance','Effect','Resume'])
+(root/'LateMod.ini').write_text('[UI]\nOpenKey=F8\n')
+assert 'LateMod' not in scan(root,'NewUI.asi')
+assert 'LateMod.asi' in scan(root,'NewUI.asi;LateMod.asi')
+(root/'NewUI.ini').write_text('[Menu]\nHotkey=\n[Gameplay]\nToggleKey=F7\n')
+assert scan(root,'NewUI.asi')==''
+
+fn=m.ModActivatorToggleDiscoveryTest;fn.argtypes=[ctypes.c_char_p,ctypes.c_char_p,ctypes.c_char_p,ctypes.c_int]
+r=scan(root,'ToggleOnly.asi;Nested.asi');assert len(r.strip().splitlines())==1 and '|HotkeyToggleEffect|121,' in r
+print('PASS: UI discovery, one UI per mod, no fallback, unloaded filtering, nested configs, modifiers, late mods and toggle discovery.')
