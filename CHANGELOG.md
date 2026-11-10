@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.2
+- Scroll mod lists with the mouse wheel while hovering over an entry.
+- Use shorter mod cards and single-line Hotkeys rows.
+
 ## 1.1.1
 - Redesigned the interface with a charcoal-and-gold theme, larger system font, searchable cards, readable shortcut labels and a conflict table.
 - Added search by formatted mod name and readable shortcut.

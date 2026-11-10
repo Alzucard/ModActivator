@@ -219,9 +219,10 @@ static void drawHotkeys() {
       ImGui::TableNextRow();
       ImGui::TableSetColumnIndex(0);
       ImGui::PushID((int)i);
-      if (ImGui::Selectable(
-              UI::name(a).c_str(), selected && identity(a) == identity(editing),
-              ImGuiSelectableFlags_SpanAllColumns, ImVec2(0, 26 * UI::scale))) {
+      const std::string rowLabel = UI::name(a) + " / " + UI::actionName(a);
+      if (ImGui::Selectable(rowLabel.c_str(),
+                            selected && identity(a) == identity(editing),
+                            ImGuiSelectableFlags_SpanAllColumns)) {
         try {
           editing = a;
           snapshot = readBytes(folder + a.file);
@@ -237,7 +238,6 @@ static void drawHotkeys() {
       if (ImGui::IsItemHovered())
         ImGui::SetTooltip("%s\n[%s] %s", a.file.c_str(), a.section.c_str(),
                           a.key.c_str());
-      ImGui::TextDisabled("%s", UI::actionName(a).c_str());
       ImGui::TableSetColumnIndex(1);
       ImGui::TextUnformatted(UI::shortcut(a).c_str());
       ImGui::TableSetColumnIndex(2);

@@ -15,6 +15,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <mutex>
 #include <set>
 #include <string>
@@ -275,7 +276,7 @@ void InitStyle(float scale) {
   style.FramePadding = {12, 8};
   style.ItemSpacing = {10, 10};
   style.ItemInnerSpacing = {8, 6};
-  style.CellPadding = {12, 10};
+  style.CellPadding = {10, 4};
   style.WindowRounding = 12;
   style.ChildRounding = 8;
   style.FrameRounding = 6;
@@ -431,41 +432,42 @@ void Render() {
                            GetProcAddress(module, "ModHubMenuV1") &&
                            GetModuleHandleA("ModHub.asi");
             bool restart = restarts.count(lower(a.module));
-            ImGui::BeginChild("Card", ImVec2(0, 90 * u), true,
-                              ImGuiWindowFlags_NoScrollbar);
-            float left = ImGui::GetCursorPosX(), top = ImGui::GetCursorPosY();
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12 * u, 5 * u));
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(10 * u, 3 * u));
+            // The list owns scrolling, including when the cursor is over a card.
+            ImGui::BeginChild("Card", ImVec2(0, 55 * u), true,
+                              ImGuiWindowFlags_NoScrollbar |
+                                  ImGuiWindowFlags_NoScrollWithMouse);
+            float top = ImGui::GetCursorPosY();
+            const float buttonX = ImGui::GetWindowContentRegionMax().x - 110 * u;
+            const float textWidth = buttonX - ImGui::GetCursorPosX() - 8 * u;
+            ImGui::PushClipRect(ImGui::GetCursorScreenPos(),
+                                ImVec2(ImGui::GetCursorScreenPos().x + textWidth,
+                                       ImGui::GetWindowPos().y + 55 * u), true);
             ImGui::TextUnformatted(UI::name(a).c_str());
-            ImGui::TextDisabled("%s", UI::shortcut(a).c_str());
-            ImGui::SetCursorPos(
-                ImVec2(ImGui::GetWindowContentRegionMax().x - 110 * u, top));
+            std::string detail = UI::shortcut(a);
+            if (restart)
+              detail += "  |  Restart required";
+            else if (managed)
+              detail += "  |  Managed by ModHub";
+            else if (a.toggle)
+              detail += "  |  State unavailable";
+            ImGui::TextDisabled("%s", detail.c_str());
+            ImGui::PopClipRect();
+            ImGui::SetCursorPos(ImVec2(buttonX, top + 5 * u));
             ImGui::BeginDisabled(!module || managed || restart);
             if (ImGui::Button(a.toggle ? "Toggle" : "Open menu",
-                              ImVec2(110 * u, 36 * u))) {
+                              ImVec2(110 * u, 31 * u))) {
               queueAction(a);
               if (!a.toggle)
                 open = false;
             }
             ImGui::EndDisabled();
-            ImGui::SetCursorPos(ImVec2(left, top + 47 * u));
-            if (restart)
-              ImGui::TextColored(ImVec4(.95f, .70f, .34f, 1),
-                                 "Restart required after hotkey changes");
-            else if (managed)
-              ImGui::TextDisabled("Managed by ModHub - open it there");
-            else if (a.toggle)
-              ImGui::TextColored(ImVec4(.80f, .67f, .42f, 1),
-                                 "State unavailable");
-            else
-              ImGui::TextDisabled("Shortcut available");
-            if (ImGui::IsWindowHovered() &&
-                ImGui::IsMouseHoveringRect(
-                    ImGui::GetWindowPos(),
-                    ImVec2(ImGui::GetWindowPos().x + ImGui::GetWindowWidth() -
-                               130 * u,
-                           ImGui::GetWindowPos().y + 90 * u)))
-              ImGui::SetTooltip("%s\n[%s] %s", a.file.c_str(),
-                                a.section.c_str(), a.key.c_str());
+            if (ImGui::IsWindowHovered() && !ImGui::IsItemHovered())
+              ImGui::SetTooltip("%s\n%s\n[%s] %s", UI::name(a).c_str(),
+                                detail.c_str(), a.section.c_str(), a.key.c_str());
             ImGui::EndChild();
+            ImGui::PopStyleVar(2);
             ImGui::PopID();
           }
           if (!count) {
@@ -808,3 +810,63 @@ extern "C" __declspec(dllexport) int ModActivatorPreview(const char *path,
 }
 
 extern "C" __declspec(dllexport) int ModActivatorUISearchTest(){if(!folder.empty())return -1;Action a{"BodyPhysics","BodyPhysics.asi","","",""};a.cachedKeys={115};a.cachedValue="115";std::string old=UI::search;strcpy(UI::search,"f4");bool key=UI::matches(a);strcpy(UI::search,"body physics");bool name=UI::matches(a);strcpy(UI::search,"not present");bool negative=!UI::matches(a);strcpy(UI::search,old.c_str());return key&&name&&negative?0:1;}
+
+extern "C" __declspec(dllexport) int ModActivatorScrollTest() {
+  if (!folder.empty())
+    return -1;
+  auto *context = ImGui::CreateContext();
+  auto &io = ImGui::GetIO();
+  io.DisplaySize = ImVec2(1000, 860);
+  io.DeltaTime = 1.0f / 60;
+  io.IniFilename = nullptr;
+  ml::gui::InitStyle(1.0f);
+  unsigned char *pixels;
+  int width, height;
+  io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+
+  catalog.clear();
+  for (int i = 0; i < 30; ++i) {
+    Action action{"Fixture", "Fixture.asi", "", "", ""};
+    action.cachedKeys = {119};
+    catalog.push_back(action);
+  }
+  previewMode = true;
+  previewTab = 0;
+  ml::State::Get().menuOpen = true;
+  const auto frame = [] {
+    ImGui::NewFrame();
+    ml::gui::Render();
+    ImGui::Render();
+  };
+  frame();
+  frame();
+  frame();
+  ImGuiWindow *card = nullptr;
+  for (auto *window : context->Windows) {
+    if (window->Active && strstr(window->Name, "/Card_") &&
+        window->ParentWindow && window->ParentWindow->ScrollMax.y > 0 &&
+        window->ParentWindow->InnerRect.Contains(
+            ImVec2(window->Pos.x + 20, window->Pos.y + 15))) {
+      card = window;
+      break;
+    }
+  }
+  int result = 1;
+  if (card) {
+    io.AddMousePosEvent(card->Pos.x + 20, card->Pos.y + 15);
+    frame();
+    result = 2;
+    if (context->HoveredWindow == card) {
+      const float start = card->ParentWindow->Scroll.y;
+      io.AddMouseWheelEvent(0, -2);
+      frame();
+      frame();
+      result = card->ParentWindow->Scroll.y > start ? 0 : 3;
+    }
+  }
+  catalog.clear();
+  previewMode = false;
+  ImGui::DestroyContext(context);
+  return result;
+}
+
