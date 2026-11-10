@@ -1,4 +1,4 @@
-# ModActivator
+# ModActivator 0.8
 
 An in-game mod menu and hotkey manager for Crimson Desert.
 
@@ -22,7 +22,7 @@ If the overlay is invisible with frame generation, close the game and try `WrapS
 
 ## Hotkey edits
 
-Select a binding in **Hotkeys**, enter a supported new shortcut, review conflicts, then save. The original config is backed up beside it as `<config>.modactivator.bak` before its first edit. Restart the game after editing unless the target mod supports live reload. Until restart, configured conflicts may differ from the running mods' active bindings.
+Select a binding in **Hotkeys**, enter a supported new shortcut, review conflicts, then save. The original config is backed up beside it as `<config>.modactivator.bak` before its first edit. ModActivator disables activation buttons for edited mods until the game restarts, since it cannot verify live reload support. Until restart, configured conflicts may differ from the running mods' active bindings.
 
 ReShade bindings are read-only here; edit them through ReShade.
 

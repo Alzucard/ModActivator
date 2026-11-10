@@ -10,13 +10,13 @@ namespace ml
     struct State
     {
         std::atomic<bool> keyboardPassthrough{false};
-        bool menuOpen      = false;
-        bool menuWatch     = false; // menu drawn but every input goes to the game (watch mode)
-        bool textCapture   = false; // an ImGui text field has focus: every key belongs to the menu
-        bool rebindCapture = false; // the General tab is waiting for the next key to bind
-        bool hooksOk       = false;
-        bool overlayReady  = false;
-        DWORD renderTid    = 0;     // thread that presents frames (set by the menu each frame)
+        std::atomic<bool> menuOpen{false};
+        std::atomic<bool> menuWatch{false}; // menu drawn but every input goes to the game (watch mode)
+        std::atomic<bool> textCapture{false}; // an ImGui text field has focus: every key belongs to the menu
+        std::atomic<bool> rebindCapture{false}; // the General tab is waiting for the next key to bind
+        std::atomic<bool> hooksOk{false};
+        std::atomic<bool> overlayReady{false};
+        std::atomic<DWORD> renderTid{0};     // thread that presents frames (set by the menu each frame)
 
         // A short on-screen notice ("auto-loot on"), drawn until `noticeUntil`.
         // An important one is drawn whether or not the toggle notice is wanted:
@@ -28,7 +28,7 @@ namespace ml
         // When the overlay last actually drew a frame. The menu can only be
         // opened or closed from inside the render path, so if drawing stops
         // while it is open there is no way left to close it.
-        DWORD lastDrawAt = 0;
+        std::atomic<DWORD> lastDrawAt{0};
 
         // True while the menu owns keyboard, mouse and pad.
         //
@@ -45,7 +45,7 @@ namespace ml
         {
             if (!menuOpen || menuWatch) return false;
             const DWORD now = GetTickCount();
-            return lastDrawAt && (now - lastDrawAt) < 500;
+            const DWORD drawn=lastDrawAt.load();return drawn && (now - drawn) < 500;
         }
 
         void Notify(const char* text, DWORD ms = 2500, bool important = false)

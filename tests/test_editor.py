@@ -14,3 +14,9 @@ r,msg,out=edit('ReShade.ini',b'[INPUT]\nKeyOverlay=36,0,0,0\n','INPUT','KeyOverl
 r,msg,out=edit('Duplicate.ini',b'[Menu]\nHotkey=F4\nHotkey=F5\n','Menu','Hotkey','F6');assert r
 r,msg,out=edit('Unicode.ini','[Menu]\nHotkey=F4\n'.encode('utf-16'),'Menu','Hotkey','F6');assert r
 print('PASS: exact/modifier conflicts; numeric/hex encoding; comments and CRLF; modifier retention; controller suffix; original backup; stale-edit refusal; duplicate/UTF16/ReShade protection.')
+
+for new in ['F4+F5','F5+Ctrl','Ctrl+Ctrl+F5','119']:
+ r,msg,out=edit('InvalidNamed.ini',b'[Menu]\nHotkey=Ctrl+F4\n','Menu','Hotkey',new)
+ assert r and out==b'[Menu]\nHotkey=Ctrl+F4\n',(new,r,msg)
+assert m.ModActivatorReliabilityTest()==0
+print('PASS: malformed multi-main/repeated/reordered modifiers, ambiguous named numeric, strict ReShade arrays, whitespace and restart queue guard.')

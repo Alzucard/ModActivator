@@ -6,7 +6,7 @@ parser=argparse.ArgumentParser();parser.add_argument('--toolchain',default=os.en
 if not args.toolchain:parser.error('Pass --toolchain PATH or set LLVM_MINGW to your extracted LLVM-MinGW folder')
 tc=Path(args.toolchain).resolve()/'bin';out=base/'dist';out.mkdir(exist_ok=True)
 obj=base/'build';obj.mkdir(exist_ok=True)
-sources=list((base/'src').rglob('*.cpp'))+[base/'vendor/imgui'/n for n in ['imgui.cpp','imgui_draw.cpp','imgui_widgets.cpp','imgui_tables.cpp','backends/imgui_impl_win32.cpp']]+list((base/'vendor/minhook/src').glob('*.c'))+[base/'vendor/minhook/src/hde/hde64.c']
+sources=sorted((base/'src').rglob('*.cpp'))+[base/'vendor/imgui'/n for n in ['imgui.cpp','imgui_draw.cpp','imgui_widgets.cpp','imgui_tables.cpp','backends/imgui_impl_win32.cpp']]+list((base/'vendor/minhook/src').glob('*.c'))+[base/'vendor/minhook/src/hde/hde64.c']
 incs=[base/'src',base/'vendor/imgui',base/'vendor/imgui/backends',base/'vendor/minhook/include',base/'vendor/minhook/src/hde']
 def compile_one(pair):
  i,src=pair; target=obj/(str(i)+'.o'); cmd=[str(tc/('x86_64-w64-mingw32-clang.exe' if src.suffix=='.c' else 'x86_64-w64-mingw32-clang++.exe')),'-c',str(src),'-o',str(target),'-O2','-DWIN32_LEAN_AND_MEAN','-DNOMINMAX','-D_CRT_SECURE_NO_WARNINGS','-fms-extensions']
