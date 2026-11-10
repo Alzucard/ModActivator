@@ -1,0 +1,115 @@
+#pragma once
+static std::string keyName(int k) {
+  if (k >= 112 && k <= 135)
+    return "F" + std::to_string(k - 111);
+  if (k >= 65 && k <= 90)
+    return std::string(1, (char)k);
+  if (k >= 48 && k <= 57)
+    return std::string(1, (char)k);
+  if (k >= 96 && k <= 105)
+    return "NumPad" + std::to_string(k - 96);
+  switch (k) {
+  case 8:
+    return "Backspace";
+  case 9:
+    return "Tab";
+  case 13:
+    return "Enter";
+  case 19:
+    return "Pause";
+  case 20:
+    return "CapsLock";
+  case 27:
+    return "Escape";
+  case 32:
+    return "Space";
+  case 33:
+    return "PageUp";
+  case 34:
+    return "PageDown";
+  case 35:
+    return "End";
+  case 36:
+    return "Home";
+  case 37:
+    return "Left";
+  case 38:
+    return "Up";
+  case 39:
+    return "Right";
+  case 40:
+    return "Down";
+  case 44:
+    return "PrintScreen";
+  case 45:
+    return "Insert";
+  case 46:
+    return "Delete";
+  case 145:
+    return "ScrollLock";
+  case 192:
+    return "Grave";
+  }
+  return {};
+}
+
+namespace UI {
+static float scale = 1.0f;
+static char search[128] = "";
+static const ImVec4 gold{0.84f, 0.69f, 0.43f, 1.0f},
+    muted{0.57f, 0.59f, 0.62f, 1.0f};
+static std::string name(const Action &a) {
+  std::string raw = std::filesystem::path(a.module).stem().string(), out;
+  for (size_t i = 0; i < raw.size(); ++i) {
+    unsigned char c = raw[i];
+    if (i && isupper(c) && islower((unsigned char)raw[i - 1]))
+      out += ' ';
+    out += c == '_' ? ' ' : c;
+  }
+  return out;
+}
+static std::string actionName(const Action &a) {
+  if (uiRank(a.section, a.key))
+    return "Menu shortcut";
+  if (toggleRank(a.section, a.key))
+    return "Feature toggle";
+  std::string raw = a.key;
+  for (const char *suffix : {"Hotkey", "KeyVK", "Key"}) {
+    std::string tail = suffix;
+    if (raw.size() > tail.size() &&
+        raw.substr(raw.size() - tail.size()) == tail) {
+      raw.resize(raw.size() - tail.size());
+      break;
+    }
+  }
+  std::string out;
+  for (size_t i = 0; i < raw.size(); ++i) {
+    if (i && isupper((unsigned char)raw[i]) &&
+        islower((unsigned char)raw[i - 1]))
+      out += ' ';
+    out += raw[i];
+  }
+  return out;
+}
+static std::string shortcut(const Action &a);
+static bool matches(const Action &a) {
+  return !search[0] || lower(a.module + " " + name(a) + " " + a.label + " " + a.cachedValue + " " + shortcut(a))
+                               .find(lower(search)) != std::string::npos;
+}
+static std::string shortcut(const Action &a) {
+  std::string out;
+  for (int k : a.cachedKeys) {
+    if (!out.empty())
+      out += " + ";
+    out += k == 17 ? "Ctrl" : k == 16 ? "Shift" : k == 18 ? "Alt" : keyName(k);
+  }
+  return out.empty() ? a.cachedValue : out;
+}
+static void badge(const char *text, ImVec4 color) {
+  ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(color.x * .20f, color.y * .20f,
+                                                color.z * .20f, 1));
+  ImGui::PushStyleColor(ImGuiCol_Text, color);
+  ImGui::SmallButton(text);
+  ImGui::PopStyleColor(2);
+}
+} // namespace UI

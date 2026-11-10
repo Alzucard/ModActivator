@@ -6,6 +6,8 @@ An in-game mod menu and hotkey manager for Crimson Desert.
 
 ## Features
 
+The panel uses a charcoal-and-gold theme with larger text, searchable mod cards, readable shortcut labels, and a scrollable hotkey table with conflict badges.
+
 - **Mod UIs:** one automatically detected menu shortcut per loaded mod.
 - **Toggles:** controls for toggle-only mods. The panel stays open when sending a toggle. State is labeled **Unreported** where a mod has no live-state interface.
 - **Hotkeys:** edit recognized keyboard bindings with config backups. Exact conflicts are red; shared base keys with different modifiers are amber.

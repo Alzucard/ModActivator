@@ -1,6 +1,7 @@
 # Changelog
 
 ## 1.1
+- Redesigned the interface with a charcoal-and-gold theme, larger system font, searchable cards, readable shortcut labels and a conflict table.
 - Reject malformed shortcuts with multiple main keys, repeated modifiers, or invalid ReShade arrays.
 - Accept whitespace in named combinations; reject ambiguous numeric edits to named settings.
 - Validate the same shortcut snapshot that is sent, and log partial input failures correctly.

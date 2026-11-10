@@ -4,10 +4,10 @@
 #include "gui/menu.h"
 #include "hooks/dx12_hook.h"
 #include "hooks/input.h"
+#include "version.h"
 #include <MinHook.h>
 #include <TlHelp32.h>
 #include <Windows.h>
-#include "version.h"
 #include <algorithm>
 #include <atomic>
 #include <cfloat>
@@ -19,6 +19,8 @@
 #include <set>
 #include <string>
 #include <vector>
+static bool previewMode = false;
+static int previewTab = 0;
 static std::string folder;
 static std::atomic<unsigned long> configReads{0};
 
@@ -186,6 +188,7 @@ void Write(const char *level, const char *fmt, ...) {
 } // namespace ml::Log
 #include "discovery.h"
 #include "hotkey_editor.h"
+#include "ui_helpers.h"
 static bool key(int k, bool up) {
   INPUT i{};
   i.type = INPUT_KEYBOARD;
@@ -265,15 +268,62 @@ static void queueAction(const Action &a) {
 }
 namespace ml::gui {
 void InitStyle(float scale) {
+  UI::scale = (std::max)(0.8f, (std::min)(1.7f, scale));
   ImGui::StyleColorsDark();
-  ImGui::GetStyle().ScaleAllSizes((std::max)(1.0f, scale));
-  ImGui::GetIO().IniFilename = nullptr;
+  auto &style = ImGui::GetStyle();
+  style.WindowPadding = {22, 20};
+  style.FramePadding = {12, 8};
+  style.ItemSpacing = {10, 10};
+  style.ItemInnerSpacing = {8, 6};
+  style.CellPadding = {12, 10};
+  style.WindowRounding = 12;
+  style.ChildRounding = 8;
+  style.FrameRounding = 6;
+  style.TabRounding = 6;
+  style.ScrollbarRounding = 8;
+  style.ScrollbarSize = 10;
+  style.WindowBorderSize = 1;
+  style.ChildBorderSize = 1;
+  auto *c = style.Colors;
+  c[ImGuiCol_WindowBg] = {.075f, .080f, .092f, 1};
+  c[ImGuiCol_ChildBg] = {.095f, .103f, .118f, 1};
+  c[ImGuiCol_Border] = {.19f, .20f, .23f, 1};
+  c[ImGuiCol_Text] = {.91f, .91f, .89f, 1};
+  c[ImGuiCol_TextDisabled] = UI::muted;
+  c[ImGuiCol_FrameBg] = {.12f, .13f, .15f, 1};
+  c[ImGuiCol_FrameBgHovered] = {.17f, .18f, .20f, 1};
+  c[ImGuiCol_FrameBgActive] = {.21f, .20f, .18f, 1};
+  c[ImGuiCol_Button] = {.18f, .17f, .15f, 1};
+  c[ImGuiCol_ButtonHovered] = {.30f, .25f, .18f, 1};
+  c[ImGuiCol_ButtonActive] = {.40f, .32f, .20f, 1};
+  c[ImGuiCol_CheckMark] = UI::gold;
+  c[ImGuiCol_Header] = {.25f, .21f, .15f, 1};
+  c[ImGuiCol_HeaderHovered] = {.29f, .25f, .18f, 1};
+  c[ImGuiCol_HeaderActive] = {.35f, .29f, .19f, 1};
+  c[ImGuiCol_Tab] = {.11f, .12f, .14f, 1};
+  c[ImGuiCol_TabHovered] = {.28f, .24f, .17f, 1};
+  c[ImGuiCol_TabSelected] = {.25f, .21f, .15f, 1};
+  c[ImGuiCol_TabSelectedOverline] = UI::gold;
+  c[ImGuiCol_TableHeaderBg] = {.13f, .14f, .16f, 1};
+  c[ImGuiCol_TableRowBgAlt] = {1, 1, 1, .025f};
+  c[ImGuiCol_Separator] = {.22f, .22f, .23f, 1};
+  c[ImGuiCol_ScrollbarBg] = {0, 0, 0, 0};
+  c[ImGuiCol_ScrollbarGrab] = {.30f, .30f, .32f, 1};
+  style.ScaleAllSizes(UI::scale);
+  auto &io = ImGui::GetIO();
+  io.IniFilename = nullptr;
+  char fonts[MAX_PATH];
+  GetWindowsDirectoryA(fonts, MAX_PATH);
+  std::string font = std::string(fonts) + "\\Fonts\\segoeui.ttf";
+  if (GetFileAttributesA(font.c_str()) != INVALID_FILE_ATTRIBUTES)
+    io.Fonts->AddFontFromFileTTF(font.c_str(), 17.0f * UI::scale);
 }
 bool FontsNeedRebuild() { return false; }
 void RebuildFonts() {}
 void PollToggle() {
   static bool was = false;
-  bool now = held(17) && held(16) && held(VK_BACK) && !held(VK_MENU) && !held(VK_LWIN) && !held(VK_RWIN);
+  bool now = held(17) && held(16) && held(VK_BACK) && !held(VK_MENU) &&
+             !held(VK_LWIN) && !held(VK_RWIN);
   auto &s = State::Get();
   if (State::ForegroundIsOurs()) {
     if (now && !was) {
@@ -308,72 +358,129 @@ void FeedInput() {
 }
 void Render() {
   auto &s = State::Get();
-  ImGui::SetNextWindowSize(ImVec2(640, 650), ImGuiCond_FirstUseEver);
+  auto &io = ImGui::GetIO();
+  float u = UI::scale;
+  ImVec2 size{(std::min)(820 * u, io.DisplaySize.x - 32),
+              (std::min)(740 * u, io.DisplaySize.y - 32)};
+  ImGui::SetNextWindowSize(size, ImGuiCond_FirstUseEver);
+  ImGui::SetNextWindowSizeConstraints(
+      ImVec2((std::min)(540 * u, size.x), (std::min)(440 * u, size.y)),
+      ImVec2(io.DisplaySize.x - 16, io.DisplaySize.y - 16));
   bool open = s.menuOpen.load();
-  if (ImGui::Begin("Mod Activator " MODACTIVATOR_VERSION, &open, ImGuiWindowFlags_NoCollapse)) {
-    ImGui::TextUnformatted("Ctrl + Shift + Backspace");
+  if (ImGui::Begin("ModActivator##Main", &open,
+                   ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
+                       ImGuiWindowFlags_NoScrollbar)) {
+    ImGui::TextColored(UI::gold, "MODACTIVATOR");
     ImGui::SameLine();
-    if (ImGui::Button("Refresh mods"))
+    ImGui::TextDisabled("%s", MODACTIVATOR_VERSION);
+    ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - 38 * u);
+    if (ImGui::SmallButton(" X "))
+      open = false;
+    ImGui::TextDisabled("In-game mod controls");
+    ImGui::Spacing();
+    ImGui::SetNextItemWidth(
+        (std::max)(180.0f, ImGui::GetContentRegionAvail().x - 126 * u));
+    ImGui::InputTextWithHint("##Search", "Search mods or shortcuts...",
+                             UI::search, sizeof UI::search);
+    ImGui::SameLine();
+    if (ImGui::Button("Refresh", ImVec2(112 * u, 0)))
       refreshRequested.store(true);
     std::vector<Action> actions;
+    std::set<std::string> restarts;
     {
       std::lock_guard<std::mutex> lock(catalogMutex);
       actions = catalog;
+      restarts = restartRequired;
     }
-    if (ImGui::BeginTabBar("Categories")) {
+    int menus = 0, toggles = 0;
+    for (auto &a : actions)
+      (a.toggle ? toggles : menus)++;
+    ImGui::Spacing();
+    if (ImGui::BeginTabBar("Categories",
+                           ImGuiTabBarFlags_NoCloseWithMiddleMouseButton)) {
       for (int tab = 0; tab < 3; ++tab) {
-        if (ImGui::BeginTabItem(tab == 2 ? "Hotkeys"
-                                         : (tab ? "Toggles" : "Mod UIs"))) {
+        std::string title = tab == 2   ? "Hotkeys"
+                            : tab == 1 ? "Toggles  " + std::to_string(toggles)
+                                       : "Mod menus  " + std::to_string(menus);
+        if (ImGui::BeginTabItem(title.c_str(), nullptr,
+                                previewMode && previewTab == tab
+                                    ? ImGuiTabItemFlags_SetSelected
+                                    : 0)) {
           if (tab == 2) {
             drawHotkeys();
             ImGui::EndTabItem();
             continue;
           }
-          if (tab)
-            ImGui::TextWrapped("These mods do not report live state. "
-                               "Unreported means on/off cannot be verified. "
-                               "Sending a toggle does not confirm a change.");
+          ImGui::Spacing();
+          ImGui::TextDisabled(
+              tab ? "Toggle features without leaving this panel."
+                  : "Open a mod's settings with its configured shortcut.");
+          ImGui::Spacing();
+          ImGui::BeginChild("ModList", ImVec2(0, -34 * u), false);
           int count = 0;
-          for (int n = 0; n < (int)actions.size(); ++n) {
-            auto &a = actions[n];
-            if (a.toggle != (tab == 1))
+          for (size_t i = 0; i < actions.size(); ++i) {
+            auto &a = actions[i];
+            if (a.toggle != (tab == 1) || !UI::matches(a))
               continue;
             ++count;
-            HMODULE module = GetModuleHandleA(a.module.c_str());
+            ImGui::PushID((int)i);
+            HMODULE module = previewMode ? GetModuleHandleA("kernel32.dll")
+                                         : GetModuleHandleA(a.module.c_str());
             bool managed = !a.toggle && module &&
                            lower(a.module) != "modhub.asi" &&
                            GetProcAddress(module, "ModHubMenuV1") &&
                            GetModuleHandleA("ModHub.asi");
-            bool restart = false;
-            {
-              std::lock_guard<std::mutex> lock(catalogMutex);
-              restart = restartRequired.count(lower(a.module)) != 0;
-            }
-            ImGui::PushID(n);
+            bool restart = restarts.count(lower(a.module));
+            ImGui::BeginChild("Card", ImVec2(0, 90 * u), true,
+                              ImGuiWindowFlags_NoScrollbar);
+            float left = ImGui::GetCursorPosX(), top = ImGui::GetCursorPosY();
+            ImGui::TextUnformatted(UI::name(a).c_str());
+            ImGui::TextDisabled("%s", UI::shortcut(a).c_str());
+            ImGui::SetCursorPos(
+                ImVec2(ImGui::GetWindowContentRegionMax().x - 110 * u, top));
             ImGui::BeginDisabled(!module || managed || restart);
-            std::string label = (a.toggle ? "Toggle: " : "") + a.label;
-            if (ImGui::Button(label.c_str(), ImVec2(-1, 32))) {
+            if (ImGui::Button(a.toggle ? "Toggle" : "Open menu",
+                              ImVec2(110 * u, 36 * u))) {
               queueAction(a);
               if (!a.toggle)
                 open = false;
             }
             ImGui::EndDisabled();
+            ImGui::SetCursorPos(ImVec2(left, top + 47 * u));
             if (restart)
-              ImGui::TextDisabled("Restart the game to use this mod after "
-                                  "editing its hotkeys.");
+              ImGui::TextColored(ImVec4(.95f, .70f, .34f, 1),
+                                 "Restart required after hotkey changes");
             else if (managed)
-              ImGui::TextDisabled(
-                  "Menu controlled by ModHub. Open it through ModHub.");
+              ImGui::TextDisabled("Managed by ModHub - open it there");
+            else if (a.toggle)
+              ImGui::TextColored(ImVec4(.80f, .67f, .42f, 1),
+                                 "State unavailable");
             else
-              ImGui::TextDisabled("Shortcut: %s", a.cachedValue.c_str());
-            if (a.toggle)
-              ImGui::TextColored(ImVec4(1, 0.75f, 0.25f, 1),
-                                 "State: Unreported (no live-state interface)");
+              ImGui::TextDisabled("Shortcut available");
+            if (ImGui::IsWindowHovered() &&
+                ImGui::IsMouseHoveringRect(
+                    ImGui::GetWindowPos(),
+                    ImVec2(ImGui::GetWindowPos().x + ImGui::GetWindowWidth() -
+                               130 * u,
+                           ImGui::GetWindowPos().y + 90 * u)))
+              ImGui::SetTooltip("%s\n[%s] %s", a.file.c_str(),
+                                a.section.c_str(), a.key.c_str());
+            ImGui::EndChild();
             ImGui::PopID();
           }
-          if (!count)
-            ImGui::TextDisabled(
-                "No matching loaded mods with recognized shortcuts.");
+          if (!count) {
+            ImGui::Spacing();
+            ImGui::TextColored(UI::gold, "Nothing here yet");
+            ImGui::TextWrapped(UI::search[0]
+                                   ? "Try another search."
+                                   : "No matching loaded mods were detected. "
+                                     "Refresh after your mods have loaded.");
+          }
+          ImGui::EndChild();
+          ImGui::Separator();
+          ImGui::TextDisabled(
+              tab ? "Toggle status is unverified unless the mod reports it."
+                  : "Ctrl + Shift + Backspace to close");
           ImGui::EndTabItem();
         }
       }
@@ -397,7 +504,8 @@ static DWORD WINAPI start(void *arg) {
   ml::Settings::Get().wrapSwapChain =
       GetPrivateProfileIntA("General", "WrapSwapChain", 0,
                             (folder + "ModActivator.ini").c_str()) != 0;
-  LOG("Mod Activator " MODACTIVATOR_VERSION " reliability fixes. Activation only; no gameplay "
+  LOG("Mod Activator " MODACTIVATOR_VERSION
+      " reliability fixes. Activation only; no gameplay "
       "hooks.");
   if (MH_Initialize() != MH_OK)
     return 0;
@@ -415,21 +523,42 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD why, LPVOID) {
   }
   return TRUE;
 }
-extern "C" __declspec(dllexport) int ModActivatorReliabilityTest(){
- if(!folder.empty())return -1;
- Action a{"Fixture","Fixture.asi","absent.ini","Menu","Hotkey"};
- if(validShortcut(keysFrom(a,"F4+F5")))return 1;
- if(validShortcut(keysFrom(a,"Ctrl+Ctrl+F5")))return 2;
- if(validShortcut(keysFrom(a,"F5+Ctrl")))return 3;
- if(keysFrom(a,"Ctrl + 7")!=std::vector<int>({17,55}))return 4;
- a.file="reshade.ini";
- if(keysFrom(a,"36,1,0,0")!=std::vector<int>({17,36}))return 5;
- for(auto value:{"36,1","36,2,0,0","36,0,0,0junk","36,0,0,0,1"})if(validShortcut(keysFrom(a,value)))return 6;
- a.module="RestartFixture.asi";
- {std::lock_guard<std::mutex>lock(catalogMutex);restartRequired.insert(lower(a.module));hasPending=false;}
- queueAction(a);if(hasPending)return 7;
- {std::lock_guard<std::mutex>lock(catalogMutex);restartRequired.erase(lower(a.module));}
- queueAction(a);if(!hasPending)return 8;hasPending=false;return 0;
+extern "C" __declspec(dllexport) int ModActivatorReliabilityTest() {
+  if (!folder.empty())
+    return -1;
+  Action a{"Fixture", "Fixture.asi", "absent.ini", "Menu", "Hotkey"};
+  if (validShortcut(keysFrom(a, "F4+F5")))
+    return 1;
+  if (validShortcut(keysFrom(a, "Ctrl+Ctrl+F5")))
+    return 2;
+  if (validShortcut(keysFrom(a, "F5+Ctrl")))
+    return 3;
+  if (keysFrom(a, "Ctrl + 7") != std::vector<int>({17, 55}))
+    return 4;
+  a.file = "reshade.ini";
+  if (keysFrom(a, "36,1,0,0") != std::vector<int>({17, 36}))
+    return 5;
+  for (auto value : {"36,1", "36,2,0,0", "36,0,0,0junk", "36,0,0,0,1"})
+    if (validShortcut(keysFrom(a, value)))
+      return 6;
+  a.module = "RestartFixture.asi";
+  {
+    std::lock_guard<std::mutex> lock(catalogMutex);
+    restartRequired.insert(lower(a.module));
+    hasPending = false;
+  }
+  queueAction(a);
+  if (hasPending)
+    return 7;
+  {
+    std::lock_guard<std::mutex> lock(catalogMutex);
+    restartRequired.erase(lower(a.module));
+  }
+  queueAction(a);
+  if (!hasPending)
+    return 8;
+  hasPending = false;
+  return 0;
 }
 extern "C" __declspec(dllexport) int ModActivatorSelfTest() {
   if (sizeof(INPUT) != 40 || vk("F8") != 119 || vk("0x78") != 120 ||
@@ -585,3 +714,97 @@ extern "C" __declspec(dllexport) int ModActivatorResponsivenessTest() {
   }
   return reads ? 3 : 0;
 }
+
+extern "C" __declspec(dllexport) int ModActivatorPreview(const char *path,
+                                                         int tab) {
+  if (!folder.empty())
+    return -1;
+  previewMode = true;
+  previewTab = tab;
+  ml::State::Get().menuOpen = true;
+  catalog.clear();
+  allBindings.clear();
+  restartRequired.clear();
+  struct Sample {
+    const char *name;
+    const char *key;
+    int vk;
+    bool toggle;
+  };
+  Sample samples[] = {
+      {"InstantSurgery.asi", "ActivationKeyVK", 33, false},
+      {"BodyPhysics.asi", "ActivationKeyVK", 115, false},
+      {"BloodLifetime20302.asi", "ActivationKeyVK", 113, false},
+      {"CrimsonRoute.asi", "ManageLocationsHotkey", 119, false},
+      {"CrimsonFastLoad.asi", "Hotkey", 116, false},
+      {"ModHub.asi", "ActivationKeyVK", 35, false},
+      {"CalmerDynamicWind.asi", "ToggleKey", 45, true},
+      {"CrimsonWeather.addon64", "HotkeyToggleEffect", 46, true}};
+  for (auto &sample : samples) {
+    Action a{std::filesystem::path(sample.name).stem().string() +
+                 " - General / " + sample.key,
+             sample.name,
+             std::string(sample.name) + ".ini",
+             "General",
+             sample.key,
+             sample.toggle};
+    a.cachedKeys = {sample.vk};
+    if (sample.vk == 113)
+      a.cachedKeys.insert(a.cachedKeys.begin(), 17);
+    a.cachedValue = std::to_string(sample.vk);
+    catalog.push_back(a);
+    allBindings.push_back(a);
+  }
+  allBindings[3].severity = 1;
+  allBindings[3].overlapNames = "Another mod - Settings shortcut";
+  allBindings[4].severity = 2;
+  allBindings[4].overlapNames = "Another mod - Menu shortcut";
+  auto *ctx = ImGui::CreateContext();
+  auto &io = ImGui::GetIO();
+  io.DisplaySize = ImVec2(1000, 860);
+  io.DeltaTime = 1.0f / 60;
+  io.IniFilename = nullptr;
+  ml::gui::InitStyle(1.0f);
+  unsigned char *pixels;
+  int w, h;
+  io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
+  io.Fonts->SetTexID((ImTextureID)1);
+  for (int i = 0; i < 4; ++i) {
+    ImGui::NewFrame();
+    ml::gui::Render();
+    ImGui::Render();
+  }
+  auto *d = ImGui::GetDrawData();
+  FILE *f = fopen(path, "wb");
+  if (!f) {
+    ImGui::DestroyContext(ctx);
+    previewMode = false;
+    return -2;
+  }
+  auto put = [&](auto v) { fwrite(&v, sizeof v, 1, f); };
+  put(w);
+  put(h);
+  fwrite(pixels, 4, w * h, f);
+  put(d->CmdListsCount);
+  for (int n = 0; n < d->CmdListsCount; ++n) {
+    auto *l = d->CmdLists[n];
+    put(l->VtxBuffer.Size);
+    fwrite(l->VtxBuffer.Data, sizeof(ImDrawVert), l->VtxBuffer.Size, f);
+    put(l->IdxBuffer.Size);
+    for (auto idx : l->IdxBuffer)
+      put((unsigned int)idx);
+    put(l->CmdBuffer.Size);
+    for (auto &c : l->CmdBuffer) {
+      put(c.ElemCount);
+      put(c.IdxOffset);
+      put(c.VtxOffset);
+      fwrite(&c.ClipRect, sizeof(float), 4, f);
+    }
+  }
+  fclose(f);
+  ImGui::DestroyContext(ctx);
+  previewMode = false;
+  return 0;
+}
+
+extern "C" __declspec(dllexport) int ModActivatorUISearchTest(){if(!folder.empty())return -1;Action a{"BodyPhysics","BodyPhysics.asi","","",""};a.cachedKeys={115};a.cachedValue="115";std::string old=UI::search;strcpy(UI::search,"f4");bool key=UI::matches(a);strcpy(UI::search,"body physics");bool name=UI::matches(a);strcpy(UI::search,"not present");bool negative=!UI::matches(a);strcpy(UI::search,old.c_str());return key&&name&&negative?0:1;}

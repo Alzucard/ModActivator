@@ -1,4 +1,5 @@
 #pragma once
+#include "ui_helpers.h"
 #include <fstream>
 #include <sstream>
 static std::string trim(std::string s) {
@@ -12,59 +13,6 @@ static std::string readBytes(const std::string &p) {
   if (!f)
     throw std::runtime_error("Cannot read config.");
   return std::string(std::istreambuf_iterator<char>(f), {});
-}
-static std::string keyName(int k) {
-  if (k >= 112 && k <= 135)
-    return "F" + std::to_string(k - 111);
-  if (k >= 65 && k <= 90)
-    return std::string(1, (char)k);
-  if (k >= 48 && k <= 57)
-    return std::string(1, (char)k);
-  if (k >= 96 && k <= 105)
-    return "NumPad" + std::to_string(k - 96);
-  switch (k) {
-  case 8:
-    return "Backspace";
-  case 9:
-    return "Tab";
-  case 13:
-    return "Enter";
-  case 19:
-    return "Pause";
-  case 20:
-    return "CapsLock";
-  case 27:
-    return "Escape";
-  case 32:
-    return "Space";
-  case 33:
-    return "PageUp";
-  case 34:
-    return "PageDown";
-  case 35:
-    return "End";
-  case 36:
-    return "Home";
-  case 37:
-    return "Left";
-  case 38:
-    return "Up";
-  case 39:
-    return "Right";
-  case 40:
-    return "Down";
-  case 44:
-    return "PrintScreen";
-  case 45:
-    return "Insert";
-  case 46:
-    return "Delete";
-  case 145:
-    return "ScrollLock";
-  case 192:
-    return "Grave";
-  }
-  return {};
 }
 static std::string encodeBinding(const Action &a, std::string input) {
   input = trim(input);
@@ -229,54 +177,95 @@ static void drawHotkeys() {
     std::lock_guard<std::mutex> lock(catalogMutex);
     list = allBindings;
   }
-  ImGui::TextWrapped(
-      "Detected keyboard bindings for loaded mods. Red: exact conflict. Amber: "
-      "same key, different modifiers. Restart after saving; mods may still use "
-      "their old shortcuts until then.");
+  int exact = 0, overlap = 0;
+  for (auto &a : list) {
+    if (a.severity == 2)
+      ++exact;
+    else if (a.severity == 1)
+      ++overlap;
+  }
+  ImGui::Spacing();
+  UI::badge((std::to_string(list.size()) + " bindings").c_str(), UI::muted);
+  ImGui::SameLine();
+  UI::badge((std::to_string(exact) + " conflicts").c_str(),
+            exact ? ImVec4(.95f, .43f, .40f, 1) : UI::muted);
+  ImGui::SameLine();
+  UI::badge((std::to_string(overlap) + " possible overlaps").c_str(),
+            overlap ? UI::gold : UI::muted);
+  ImGui::Spacing();
+  ImGui::TextDisabled(
+      "Select a binding to edit. Changes apply after restarting the game.");
   if (!message.empty())
     ImGui::TextWrapped("%s", message.c_str());
   float available = ImGui::GetContentRegionAvail().y;
-  float listHeight = (std::max)(60.0f, available - (selected ? 220.0f : 0.0f));
-  ImGui::BeginChild("Bindings", ImVec2(0, listHeight), true);
-  for (size_t i = 0; i < list.size(); ++i) {
-    auto &a = list[i];
-    int severity = a.severity;
-    const std::string &names = a.overlapNames;
-    if (severity)
-      ImGui::PushStyleColor(ImGuiCol_Text, severity == 2
-                                               ? ImVec4(1, .3f, .3f, 1)
-                                               : ImVec4(1, .75f, .2f, 1));
-    ImGui::PushID((int)i);
-    if (ImGui::Selectable((a.label + " : " + a.cachedValue).c_str())) {
-      try {
-        editing = a;
-        snapshot = readBytes(folder + a.file);
-        selected = true;
-        entry[0] = 0;
-        lastInput = "\x01";
-        acknowledge = false;
-        message.clear();
-      } catch (const std::exception &e) {
-        message = e.what();
+  float listHeight =
+      (std::max)(80.0f, available - (selected ? 250.0f * UI::scale : 0.0f));
+  if (ImGui::BeginTable("Bindings", 3,
+                        ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg |
+                            ImGuiTableFlags_BordersInnerH |
+                            ImGuiTableFlags_Resizable,
+                        ImVec2(0, listHeight))) {
+    ImGui::TableSetupColumn("MOD / ACTION", ImGuiTableColumnFlags_WidthStretch);
+    ImGui::TableSetupColumn("SHORTCUT", ImGuiTableColumnFlags_WidthFixed,
+                            160 * UI::scale);
+    ImGui::TableSetupColumn("STATUS", ImGuiTableColumnFlags_WidthFixed,
+                            118 * UI::scale);
+    ImGui::TableSetupScrollFreeze(0, 1);
+    ImGui::TableHeadersRow();
+    for (size_t i = 0; i < list.size(); ++i) {
+      auto &a = list[i];
+      if (!UI::matches(a))
+        continue;
+      ImGui::TableNextRow();
+      ImGui::TableSetColumnIndex(0);
+      ImGui::PushID((int)i);
+      if (ImGui::Selectable(
+              UI::name(a).c_str(), selected && identity(a) == identity(editing),
+              ImGuiSelectableFlags_SpanAllColumns, ImVec2(0, 26 * UI::scale))) {
+        try {
+          editing = a;
+          snapshot = readBytes(folder + a.file);
+          selected = true;
+          entry[0] = 0;
+          lastInput = "\x01";
+          acknowledge = false;
+          message.clear();
+        } catch (const std::exception &e) {
+          message = e.what();
+        }
       }
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s\n[%s] %s", a.file.c_str(), a.section.c_str(),
+                          a.key.c_str());
+      ImGui::TextDisabled("%s", UI::actionName(a).c_str());
+      ImGui::TableSetColumnIndex(1);
+      ImGui::TextUnformatted(UI::shortcut(a).c_str());
+      ImGui::TableSetColumnIndex(2);
+      UI::badge(a.severity == 2   ? "Conflict"
+                : a.severity == 1 ? "Overlap"
+                                  : "Clear",
+                a.severity == 2   ? ImVec4(.95f, .43f, .40f, 1)
+                : a.severity == 1 ? UI::gold
+                                  : ImVec4(.47f, .70f, .58f, 1));
+      if (a.severity && ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", a.overlapNames.c_str());
+      ImGui::PopID();
     }
-    if (severity && ImGui::IsItemHovered())
-      ImGui::SetTooltip("%s%s",
-                        severity == 2 ? "Exact conflict\n"
-                                      : "Shared base key (possible conflict)\n",
-                        names.c_str());
-    ImGui::PopID();
-    if (severity)
-      ImGui::PopStyleColor();
+    ImGui::EndTable();
   }
-  ImGui::EndChild();
   if (selected) {
-    ImGui::TextWrapped("Editing: %s", editing.label.c_str());
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+    ImGui::TextColored(UI::gold, "EDIT SHORTCUT");
+    ImGui::SameLine();
+    ImGui::TextUnformatted(UI::name(editing).c_str());
+    ImGui::TextDisabled("Current: %s", UI::shortcut(editing).c_str());
+    ImGui::SetNextItemWidth(260 * UI::scale);
     if (ImGui::InputText("New shortcut", entry, sizeof entry))
       acknowledge = false;
-    ImGui::TextWrapped(
-        "Numeric settings accept one key and keep modifier flags. Named "
-        "settings accept combinations. Controller suffixes are preserved.");
+    ImGui::TextWrapped("Use a key such as F8. Existing modifier flags and "
+                       "controller bindings are preserved.");
     try {
       if (lastInput != entry) {
         lastInput = entry;
@@ -330,3 +319,4 @@ static void drawHotkeys() {
       selected = false;
   }
 }
+
