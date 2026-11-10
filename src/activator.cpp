@@ -7,6 +7,7 @@
 #include <MinHook.h>
 #include <TlHelp32.h>
 #include <Windows.h>
+#include "version.h"
 #include <algorithm>
 #include <atomic>
 #include <cfloat>
@@ -309,7 +310,7 @@ void Render() {
   auto &s = State::Get();
   ImGui::SetNextWindowSize(ImVec2(640, 650), ImGuiCond_FirstUseEver);
   bool open = s.menuOpen.load();
-  if (ImGui::Begin("Mod Activator", &open, ImGuiWindowFlags_NoCollapse)) {
+  if (ImGui::Begin("Mod Activator " MODACTIVATOR_VERSION, &open, ImGuiWindowFlags_NoCollapse)) {
     ImGui::TextUnformatted("Ctrl + Shift + Backspace");
     ImGui::SameLine();
     if (ImGui::Button("Refresh mods"))
@@ -396,7 +397,7 @@ static DWORD WINAPI start(void *arg) {
   ml::Settings::Get().wrapSwapChain =
       GetPrivateProfileIntA("General", "WrapSwapChain", 0,
                             (folder + "ModActivator.ini").c_str()) != 0;
-  LOG("Mod Activator 0.8 reliability fixes. Activation only; no gameplay "
+  LOG("Mod Activator " MODACTIVATOR_VERSION " reliability fixes. Activation only; no gameplay "
       "hooks.");
   if (MH_Initialize() != MH_OK)
     return 0;
