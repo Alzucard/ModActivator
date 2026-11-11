@@ -328,83 +328,76 @@ static void drawSettings(const std::vector<Action> &actions) {
     ImGui::TextWrapped("%s", status.c_str());
 
   ImGui::Separator();
-  if (ImGui::CollapsingHeader("Binding type")) {
-    std::vector<Action> bindings;
-    {
-      std::lock_guard<std::mutex> lock(catalogMutex);
-      bindings = allBindings;
-    }
-    if (ImGui::BeginTable("BindingTypes", 2, ImGuiTableFlags_RowBg)) {
-      ImGui::TableSetupColumn("Binding");
-      ImGui::TableSetupColumn("Show as");
-      ImGui::TableHeadersRow();
-      const char *types[] = {"Automatic", "Menu", "Toggle", "Hotkeys only"};
-      for (const auto &binding : bindings) {
-        if (!UI::matches(binding))
-          continue;
-        ImGui::PushID(identity(binding).c_str());
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0);
-        const auto label = UI::name(binding) + " / " + UI::actionName(binding);
-        ImGui::TextUnformatted(label.c_str());
-        ImGui::TableSetColumnIndex(1);
-        int type = binding.typeOverride;
-        ImGui::SetNextItemWidth(-FLT_MIN);
-        if (ImGui::Combo("##BindingType", &type, types, IM_ARRAYSIZE(types))) {
-          if (saveBindingType(binding, type)) {
-            refreshRequested.store(true);
-            status = "Binding type saved.";
-          } else {
-            status = "Could not save the binding type.";
-          }
-        }
-        ImGui::PopID();
-      }
-      ImGui::EndTable();
-    }
-  }
-
-  ImGui::Separator();
   ImGui::TextUnformatted("Mod placement");
-  if (ImGui::BeginTable("Placement", 2, ImGuiTableFlags_RowBg)) {
-    ImGui::TableSetupColumn("Mod");
+  std::vector<Action> bindings = actions;
+  std::set<std::string> visible;
+  for (const auto &action : actions)
+    visible.insert(identity(action));
+  {
+    std::lock_guard<std::mutex> lock(catalogMutex);
+    for (const auto &binding : allBindings)
+      if (!visible.count(identity(binding)))
+        bindings.push_back(binding);
+  }
+  if (ImGui::BeginTable("Placement", 3, ImGuiTableFlags_RowBg |
+                                           ImGuiTableFlags_Resizable)) {
+    ImGui::TableSetupColumn("Mod / binding", ImGuiTableColumnFlags_WidthStretch, 1.5f);
     ImGui::TableSetupColumn("Tab");
+    ImGui::TableSetupColumn("Show as");
     ImGui::TableHeadersRow();
-    for (const auto &action : actions) {
+    const char *types[] = {"Automatic", "Menu", "Toggle", "Hotkeys only"};
+    for (const auto &action : bindings) {
       if (!UI::matches(action))
         continue;
       const auto binding = identity(action);
       ImGui::PushID(binding.c_str());
       ImGui::TableNextRow();
       ImGui::TableSetColumnIndex(0);
-      ImGui::TextUnformatted(UI::name(action).c_str());
+      const auto name = UI::name(action) + " / " + UI::actionName(action);
+      ImGui::TextUnformatted(name.c_str());
       if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("%s", UI::actionName(action).c_str());
+        ImGui::SetTooltip("%s\n[%s] %s", name.c_str(), action.section.c_str(),
+                          action.key.c_str());
       ImGui::TableSetColumnIndex(1);
-      const int current = assignedTab(binding);
-      const std::string automatic = action.toggle ? "Automatic (Toggles)"
-                                                  : "Automatic (Mod menus)";
-      const auto label = current == modMenusPlacement ? "Mod menus"
-                       : current == togglesPlacement ? "Toggles"
-                       : current ? modLayout.tabs.at(current) : automatic;
+      if (!visible.count(binding)) {
+        ImGui::TextDisabled("No card");
+      } else {
+        const int current = assignedTab(binding);
+        const std::string automatic = action.toggle ? "Automatic (Toggles)"
+                                                    : "Automatic (Mod menus)";
+        const auto label = current == modMenusPlacement ? "Mod menus"
+                         : current == togglesPlacement ? "Toggles"
+                         : current ? modLayout.tabs.at(current) : automatic;
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        if (ImGui::BeginCombo("##Destination", label.c_str())) {
+          int destination = current;
+          if (ImGui::Selectable(automatic.c_str(), current == 0))
+            destination = 0;
+          if (ImGui::Selectable("Mod menus", current == modMenusPlacement))
+            destination = modMenusPlacement;
+          if (ImGui::Selectable("Toggles", current == togglesPlacement))
+            destination = togglesPlacement;
+          for (const auto &[id, name] : modLayout.tabs)
+            if (ImGui::Selectable((name + "###Destination" + std::to_string(id)).c_str(), current == id))
+              destination = id;
+          ImGui::EndCombo();
+          if (destination != current) {
+            auto next = modLayout;
+            placementFor(next, binding).tab = destination;
+            status = saveLayout(std::move(next)) ? "Placement saved."
+                                                  : "Could not save placement.";
+          }
+        }
+      }
+      ImGui::TableSetColumnIndex(2);
+      int type = action.typeOverride;
       ImGui::SetNextItemWidth(-FLT_MIN);
-      if (ImGui::BeginCombo("##Destination", label.c_str())) {
-        int destination = current;
-        if (ImGui::Selectable(automatic.c_str(), current == 0))
-          destination = 0;
-        if (ImGui::Selectable("Mod menus", current == modMenusPlacement))
-          destination = modMenusPlacement;
-        if (ImGui::Selectable("Toggles", current == togglesPlacement))
-          destination = togglesPlacement;
-        for (const auto &[id, name] : modLayout.tabs)
-          if (ImGui::Selectable((name + "###Destination" + std::to_string(id)).c_str(), current == id))
-            destination = id;
-        ImGui::EndCombo();
-        if (destination != current) {
-          auto next = modLayout;
-          placementFor(next, binding).tab = destination;
-          status = saveLayout(std::move(next)) ? "Placement saved."
-                                                : "Could not save placement.";
+      if (ImGui::Combo("##BindingType", &type, types, IM_ARRAYSIZE(types))) {
+        if (saveBindingType(action, type)) {
+          refreshRequested.store(true);
+          status = "Binding type saved.";
+        } else {
+          status = "Could not save the binding type.";
         }
       }
       ImGui::PopID();

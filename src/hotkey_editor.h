@@ -14,10 +14,12 @@ static std::string readBytes(const std::string &p) {
     throw std::runtime_error("Cannot read config.");
   return std::string(std::istreambuf_iterator<char>(f), {});
 }
-static std::string encodeBinding(const Action &a, std::string input) {
+static std::string encodeBinding(const Action &a, std::string input,
+                                 std::vector<int> recorded = {}) {
   input = trim(input);
-  if (input.empty() || input.find_first_of("\r\n|") != input.npos ||
-      bindingComment(input) != input.npos)
+  if (recorded.empty() &&
+      (input.empty() || input.find_first_of("\r\n|") != input.npos ||
+       bindingComment(input) != input.npos))
     throw std::runtime_error(
         "Enter one key or combination, such as F6 or Ctrl+F6.");
   if (lower(a.file) == "reshade.ini")
@@ -29,28 +31,52 @@ static std::string encodeBinding(const Action &a, std::string input) {
   const auto base = trim(setting.substr(0, bar));
   const bool numeric = !base.empty() && isdigit((unsigned char)base[0]) &&
                        base.find(',') == base.npos && !standaloneDigit(a, base);
-  input = compactShortcut(std::move(input));
-  auto separator = input.find_last_of('+');
-  if (input == "+")
-    separator = input.npos;
-  else if (input.size() >= 2 && input.compare(input.size() - 2, 2, "++") == 0)
-    --separator;
-  const size_t start = separator == input.npos ? 0 : separator + 1;
-  const auto token = trim(input.substr(start));
-  const auto symbol = keySymbol(token);
-  const bool numericLiteral = symbol >= L'0' && symbol <= L'9';
-  if (symbol && (!numeric || (!numericLiteral && separator == input.npos))) {
-    const auto layout = gameKeyboardLayout();
-    auto scan = scanForSymbol(symbol, layout);
-    if (!scan)
-      scan = scanForLocalizedSymbol(token, layout);
-    const auto canonical = usSymbolForScan(scan);
-    if (canonical) {
-      if (numeric) {
-        input = std::to_string(vkForScan(scan, layout));
-      } else {
-        input.replace(start, input.size() - start,
-                      scan == 0x29 ? "Grave" : std::string(1, canonical));
+  if (!recorded.empty()) {
+    if (!validShortcut(recorded))
+      throw std::runtime_error("Unsupported shortcut.");
+    // Preserve modifier flags stored separately from the main key.
+    for (int modifier : keysFrom(a, "")) {
+      auto end = recorded.end() - 1;
+      recorded.erase(std::remove(recorded.begin(), end, modifier), end);
+    }
+    if (numeric && recorded.size() != 1)
+      throw std::runtime_error("This mod stores a single key code with separate modifier settings.");
+    if (numeric) {
+      input = std::to_string(recorded.back());
+    } else {
+      for (int key : recorded) {
+        const auto name = configKeyName(key);
+        if (name.empty())
+          throw std::runtime_error("This mod's shortcut format cannot represent this key.");
+        if (!input.empty())
+          input += '+';
+        input += name;
+      }
+    }
+  } else {
+    input = compactShortcut(std::move(input));
+    auto separator = input.find_last_of('+');
+    if (input == "+")
+      separator = input.npos;
+    else if (input.size() >= 2 && input.compare(input.size() - 2, 2, "++") == 0)
+      --separator;
+    const size_t start = separator == input.npos ? 0 : separator + 1;
+    const auto token = trim(input.substr(start));
+    const auto symbol = keySymbol(token);
+    const bool numericLiteral = symbol >= L'0' && symbol <= L'9';
+    if (symbol && (!numeric || (!numericLiteral && separator == input.npos))) {
+      const auto layout = gameKeyboardLayout();
+      auto scan = scanForSymbol(symbol, layout);
+      if (!scan)
+        scan = scanForLocalizedSymbol(token, layout);
+      const auto canonical = usSymbolForScan(scan);
+      if (canonical) {
+        if (numeric) {
+          input = std::to_string(vkForScan(scan, layout));
+        } else {
+          input.replace(start, input.size() - start,
+                        scan == 0x29 ? "Grave" : std::string(1, canonical));
+        }
       }
     }
   }
@@ -85,6 +111,8 @@ static std::string encodeBinding(const Action &a, std::string input) {
     throw std::runtime_error("Unsupported shortcut.");
   if (!numeric && configKeyName(ks.back()).empty())
     throw std::runtime_error("Unsupported key name.");
+  if (!recorded.empty() && ks.back() != recorded.back())
+    throw std::runtime_error("This mod's shortcut format cannot represent the recorded key.");
   return converted;
 }
 static std::string replaceValue(const std::string &bytes, const Action &a,
@@ -188,12 +216,10 @@ static bool saveBinding(const Action &a, const std::string &expected,
 static void drawHotkeys() {
   static Action editing;
   static bool selected = false;
-  static char entry[128] = "";
-  static std::string snapshot, message;
+  static std::string snapshot, message, encoded, validationError;
   static bool acknowledge = false;
-  static std::string lastInput, encodedCache, validationError;
   static HKL lastLayout = nullptr;
-  static std::vector<int> proposedCache;
+  static std::vector<int> recorded, proposed;
   std::vector<Action> list;
   {
     std::lock_guard<std::mutex> lock(catalogMutex);
@@ -250,8 +276,10 @@ static void drawHotkeys() {
           editing = a;
           snapshot = std::move(selectedSnapshot);
           selected = true;
-          entry[0] = 0;
-          lastInput = "\x01";
+          recorded.clear();
+          proposed.clear();
+          validationError.clear();
+          UI::recording = 0;
           acknowledge = false;
           message.clear();
         } catch (const std::exception &e) {
@@ -281,7 +309,12 @@ static void drawHotkeys() {
     const auto layout = gameKeyboardLayout();
     if (layout != lastLayout) {
       lastLayout = layout;
-      lastInput = "\x01";
+      if (!recorded.empty())
+        message = "Keyboard layout changed. Set the shortcut again.";
+      recorded.clear();
+      proposed.clear();
+      validationError.clear();
+      UI::recording = 0;
       acknowledge = false;
     }
     ImGui::Spacing();
@@ -291,25 +324,25 @@ static void drawHotkeys() {
     ImGui::SameLine();
     ImGui::TextUnformatted(UI::name(editing).c_str());
     ImGui::TextDisabled("Current: %s", UI::shortcut(editing).c_str());
-    ImGui::SetNextItemWidth(260 * UI::scale);
-    if (ImGui::InputTextWithHint("New shortcut", "Ctrl+F6", entry, sizeof entry))
+    const float width = (std::min)(260 * UI::scale,
+                                  ImGui::GetContentRegionAvail().x * .55f);
+    if (auto keys = UI::shortcutField(recorded, width); !keys.empty()) {
+      recorded = std::move(keys);
+      proposed.clear();
+      validationError.clear();
       acknowledge = false;
-    try {
-      if (lastInput != entry) {
-        lastInput = entry;
-        validationError.clear();
-        try {
-          encodedCache = encodeBinding(editing, entry);
-          proposedCache = keysFrom(editing, encodedCache);
-        } catch (const std::exception &e) {
-          validationError = e.what();
-        }
+      try {
+        encoded = encodeBinding(editing, "", recorded);
+        proposed = keysFrom(editing, encoded);
+      } catch (const std::exception &e) {
+        validationError = e.what();
       }
-      if (!validationError.empty())
-        throw std::runtime_error(validationError);
-      const auto &encoded = encodedCache;
-      const auto &proposed = proposedCache;
-      ImGui::TextDisabled("New binding: %s", shortcutLabel(proposed).c_str());
+    }
+    if (!validationError.empty())
+      ImGui::TextWrapped("%s", validationError.c_str());
+    if (!proposed.empty()) {
+      if (proposed != recorded)
+        ImGui::TextDisabled("Saved binding: %s", shortcutLabel(proposed).c_str());
       const auto ownKeys = openerKeys();
       bool clashes = conflict(proposed, ownKeys) != 0;
       for (auto &a : list)
@@ -324,7 +357,7 @@ static void drawHotkeys() {
                            shortcutLabel(ownKeys).c_str());
       if (clashes)
         ImGui::Checkbox("Save despite overlap", &acknowledge);
-      ImGui::BeginDisabled(clashes && !acknowledge);
+      ImGui::BeginDisabled(UI::recording || (clashes && !acknowledge));
       if (ImGui::Button("Save hotkey")) {
         try {
           bool changed;
@@ -345,13 +378,12 @@ static void drawHotkeys() {
         }
       }
       ImGui::EndDisabled();
-    } catch (const std::exception &e) {
-      if (entry[0])
-        ImGui::TextWrapped("%s", e.what());
+      ImGui::SameLine();
     }
-    ImGui::SameLine();
-    if (ImGui::Button("Cancel"))
+    if (ImGui::Button("Cancel")) {
       selected = false;
+      UI::recording = 0;
+    }
     ImGui::EndChild();
   }
 }

@@ -82,47 +82,91 @@ static std::string shortcutLabel(const std::vector<int> &keys) {
 namespace UI {
 static ImGuiID recording = 0;
 static bool waitingForRelease = false;
-static std::vector<int> recordShortcut(const char *label) {
-  const auto id = ImGui::GetID(label);
-  if (ImGui::Button(recording == id ? "Press shortcut...##Recording" : label)) {
-    recording = id;
-    waitingForRelease = true;
-  }
+static void beginShortcutCapture(ImGuiID id) {
+  recording = id;
+  waitingForRelease = true;
+}
+static std::vector<int> captureModifiers(bool (*isHeld)(int) = held) {
+  std::vector<int> keys;
+  for (int key : {VK_CONTROL, VK_SHIFT, VK_MENU})
+    if (isHeld(key))
+      keys.push_back(key);
+  return keys;
+}
+static std::vector<int> captureShortcut(ImGuiID id, bool (*isHeld)(int) = held) {
   if (recording != id || ml::State::Get().sendingShortcut)
     return {};
-  if (held(VK_ESCAPE)) {
+  if (isHeld(VK_ESCAPE)) {
     recording = 0;
     return {};
   }
-  ImGui::SameLine();
-  ImGui::TextDisabled("Esc cancels");
   int main = 0;
   for (int key = VK_BACK; key <= VK_OEM_102; ++key) {
     if ((keyName(key).empty() && !isPrintableKey(key)) ||
-        key == VK_CONTROL || key == VK_SHIFT || key == VK_MENU || !held(key))
+        key == VK_CONTROL || key == VK_SHIFT || key == VK_MENU || !isHeld(key))
       continue;
-    if (main)
+    if (main) {
+      waitingForRelease = true;
       return {};
+    }
     main = key;
   }
-  const auto modifiers = heldModifiers();
   if (waitingForRelease) {
-    if (!main && !modifiers)
+    if (!main)
       waitingForRelease = false;
     return {};
   }
-  if (!main || held(VK_LWIN) || held(VK_RWIN))
+  if (!main || isHeld(VK_LWIN) || isHeld(VK_RWIN))
     return {};
   recording = 0;
-  std::vector<int> result;
-  if (modifiers & (1u << 8))
-    result.push_back(VK_CONTROL);
-  if (modifiers & (1u << 9))
-    result.push_back(VK_SHIFT);
-  if (modifiers & (1u << 10))
-    result.push_back(VK_MENU);
-  result.push_back(main);
-  return result;
+  auto keys = captureModifiers(isHeld);
+  keys.push_back(main);
+  return keys;
+}
+static std::vector<int> recordShortcut(const char *label) {
+  const auto id = ImGui::GetID(label);
+  if (ImGui::Button(recording == id ? "Press shortcut...##Recording" : label))
+    beginShortcutCapture(id);
+  if (recording == id) {
+    ImGui::SameLine();
+    ImGui::TextDisabled("Esc cancels");
+  }
+  return captureShortcut(id);
+}
+static std::vector<int> shortcutField(const std::vector<int> &keys, float width) {
+  const auto id = ImGui::GetID("##NewShortcut");
+  const bool active = recording == id;
+  std::string label;
+  if (active) {
+    label = shortcutLabel(captureModifiers());
+    label += label.empty() ? "Press shortcut..." : " + ...";
+  } else {
+    label = keys.empty() ? "Click to set shortcut" : shortcutLabel(keys);
+  }
+
+  const auto &style = ImGui::GetStyle();
+  ImGui::PushStyleColor(ImGuiCol_Button,
+                        style.Colors[active ? ImGuiCol_FrameBgActive : ImGuiCol_FrameBg]);
+  ImGui::PushStyleColor(ImGuiCol_ButtonHovered, style.Colors[ImGuiCol_FrameBgHovered]);
+  ImGui::PushStyleColor(ImGuiCol_ButtonActive, style.Colors[ImGuiCol_FrameBgActive]);
+  if (ImGui::Button("##NewShortcut", ImVec2(width, ImGui::GetFrameHeight())))
+    beginShortcutCapture(id);
+  ImGui::PopStyleColor(3);
+  const auto min = ImGui::GetItemRectMin();
+  const auto max = ImGui::GetItemRectMax();
+  auto *draw = ImGui::GetWindowDrawList();
+  draw->PushClipRect(min, max, true);
+  draw->AddText(ImVec2(min.x + style.FramePadding.x, min.y + style.FramePadding.y),
+                ImGui::GetColorU32(!active && keys.empty() ? ImGuiCol_TextDisabled : ImGuiCol_Text),
+                label.c_str());
+  draw->PopClipRect();
+  ImGui::SameLine();
+  ImGui::TextUnformatted("New shortcut");
+  if (recording == id) {
+    ImGui::SameLine();
+    ImGui::TextDisabled("Esc cancels");
+  }
+  return captureShortcut(id);
 }
 static float scale = 1.0f;
 static char search[128] = "";

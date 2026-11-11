@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.2.1
+- Capture the keys pressed in the shortcut field, including Ctrl, Shift, and Alt.
+- Move Show as into the Mod placement table.
+
 ## 1.2.2
 - Drag mod cards to reorder them within their current tab.
 - Move mod cards to either built-in mod tab or to any custom tab from Settings.

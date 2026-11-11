@@ -775,8 +775,29 @@ ModActivatorSettingsTest(const char *root) {
         replaceValue("[Menu]\nHotkey=; ; comment\n", first, "F8") !=
             "[Menu]\nHotkey=F8 ; comment\n")
       return 2;
-    if (encodeBinding(second, "F6") != "0x75")
+    if (encodeBinding(second, "F6") != "0x75" ||
+        encodeBinding(second, "", {VK_CONTROL, VK_F6}) != "0x75")
       return 3;
+
+    static std::set<int> down;
+    const auto isHeld = [](int key) { return down.count(key) != 0; };
+    constexpr ImGuiID field = 1;
+    UI::beginShortcutCapture(field);
+    down = {VK_CONTROL};
+    if (!UI::captureShortcut(field, isHeld).empty())
+      return 11;
+    down = {VK_CONTROL, VK_SHIFT, VK_MENU};
+    if (!UI::captureShortcut(field, isHeld).empty())
+      return 12;
+    down.insert(VK_F6);
+    const auto captured = UI::captureShortcut(field, isHeld);
+    if (captured != std::vector<int>{VK_CONTROL, VK_SHIFT, VK_MENU, VK_F6} ||
+        encodeBinding(first, "", captured) != "Ctrl+Shift+Alt+F6" || UI::recording)
+      return 13;
+    UI::beginShortcutCapture(field);
+    down = {VK_ESCAPE};
+    if (!UI::captureShortcut(field, isHeld).empty() || UI::recording)
+      return 14;
 
     ModLayout test;
     test.tabs[firstCustomTab] = "Test tab";
