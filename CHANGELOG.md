@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.2.3
+- Keep binding labels tied to their INI action names when changing Show as.
+- Show the original INI field and nearby comment in binding tooltips.
+
 ## 1.2.2.2
 - Use ReShade's presentation callbacks on ReShade installations, avoiding a second set of DXGI hooks.
 

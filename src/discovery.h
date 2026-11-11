@@ -159,6 +159,8 @@ static BindingComments readBindingComments(const std::filesystem::path &path) {
 }
 
 static void classifyBinding(Action &action, const BindingComments &comments) {
+  const auto comment = comments.find({lower(action.section), lower(action.key)});
+  action.description = comment == comments.end() ? "" : trimConfigLine(comment->second);
   action.typeOverride = readBindingType(action);
   if (action.typeOverride >= 1 && action.typeOverride <= 3) {
     action.menuRank = action.typeOverride == 1 ? 200 : 0;
@@ -174,8 +176,7 @@ static void classifyBinding(Action &action, const BindingComments &comments) {
   static const std::regex opensInterface(
       R"(\b(?:open(?:s|/close)?|close[sd]?|show[s]?|hide[s]?|toggle[s]?)\s+(?:(?:the|a|an|mod|settings|in-game|in game)\s+)*(?:menu|gui|ui|window|panel|overlay|wiki|journal|interface)\b)",
       std::regex::icase | std::regex::optimize);
-  const auto comment = comments.find({lower(action.section), lower(action.key)});
-  if (comment != comments.end() && std::regex_search(comment->second, opensInterface)) {
+  if (std::regex_search(action.description, opensInterface)) {
     action.menuRank = 120;
     action.featureRank = 0;
   }

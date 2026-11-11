@@ -1,4 +1,4 @@
-# ModActivator 1.2.2.2
+# ModActivator 1.2.2.3
 
 An in-game mod menu and hotkey manager for Crimson Desert.
 
@@ -25,7 +25,7 @@ When ReShade supports the add-on API, ModActivator uses its presentation callbac
 
 ## Binding types
 
-ModActivator uses shortcut names and nearby INI comments to identify menu openers and feature toggles. To correct a guess, open **Settings → Mod placement** and set **Show as** to **Menu**, **Toggle**, or **Hotkeys only**. **Automatic** clears the override. These choices are saved in ModActivator.ini and apply immediately. The binding must first be detectable by the existing keyboard shortcut scan.
+ModActivator uses shortcut names and nearby INI comments to identify menu openers and feature toggles. To correct a guess, open **Settings → Mod placement** and set **Show as** to **Menu**, **Toggle**, or **Hotkeys only**. **Automatic** clears the override. These choices are saved in ModActivator.ini and apply immediately. The action label comes from the original INI key. Hover over a binding to see its exact key and any nearby INI comment. The binding must first be detectable by the existing keyboard shortcut scan.
 
 ## Hotkey edits
 

@@ -183,16 +183,21 @@ static std::string name(const Action &a) {
   return out;
 }
 static std::string actionName(const Action &a) {
-  if (a.menuRank)
-    return "Menu shortcut";
-  if (a.featureRank)
-    return "Feature toggle";
+  // Keep the INI action separate from classification and tab placement.
   std::string raw = a.key;
-  for (const char *suffix : {"Hotkey", "KeyVK", "Key"}) {
-    std::string tail = suffix;
-    if (raw.size() > tail.size() &&
-        raw.substr(raw.size() - tail.size()) == tail) {
-      raw.resize(raw.size() - tail.size());
+  auto folded = lower(raw);
+  for (std::string_view prefix : {"hotkey", "key"}) {
+    if (raw.size() > prefix.size() && folded.compare(0, prefix.size(), prefix) == 0 &&
+        (raw[prefix.size()] == '_' || isupper((unsigned char)raw[prefix.size()]))) {
+      raw.erase(0, prefix.size());
+      folded.erase(0, prefix.size());
+      break;
+    }
+  }
+  for (std::string_view suffix : {"hotkey", "keycode", "keyvk", "key"}) {
+    if (raw.size() > suffix.size() &&
+        folded.compare(raw.size() - suffix.size(), suffix.size(), suffix) == 0) {
+      raw.resize(raw.size() - suffix.size());
       break;
     }
   }
@@ -201,18 +206,38 @@ static std::string actionName(const Action &a) {
     if (i && isupper((unsigned char)raw[i]) &&
         islower((unsigned char)raw[i - 1]))
       out += ' ';
-    out += raw[i];
+    out += raw[i] == '_' ? ' ' : raw[i];
   }
+  out = trimConfigLine(out);
+  if (out.empty())
+    return a.key;
+  out.front() = (char)toupper((unsigned char)out.front());
   return out;
-}
-static std::string shortcut(const Action &a);
-static bool matches(const Action &a) {
-  return !search[0] || lower(a.module + " " + name(a) + " " + a.label + " " + a.cachedValue + " " + shortcut(a))
-                               .find(lower(search)) != std::string::npos;
 }
 static std::string shortcut(const Action &a) {
   auto out = shortcutLabel(a.cachedKeys);
   return out.empty() ? a.cachedValue : out;
+}
+static bool matches(const Action &a) {
+  return !search[0] ||
+         lower(a.module + " " + name(a) + " " + a.label + " " + actionName(a) +
+               " " + a.description + " " + a.cachedValue + " " + shortcut(a))
+                 .find(lower(search)) != std::string::npos;
+}
+static void bindingTooltip(const Action &a, const std::string &detail = {}) {
+  if (!ImGui::BeginTooltip())
+    return;
+  const auto title = name(a) + " / " + actionName(a);
+  ImGui::TextUnformatted(title.c_str());
+  ImGui::TextDisabled("%s", (detail.empty() ? shortcut(a) : detail).c_str());
+  ImGui::TextDisabled("%s / [%s] %s", a.file.c_str(), a.section.c_str(), a.key.c_str());
+  if (!a.description.empty()) {
+    ImGui::Separator();
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 360 * scale);
+    ImGui::TextUnformatted(a.description.c_str());
+    ImGui::PopTextWrapPos();
+  }
+  ImGui::EndTooltip();
 }
 static void badge(const char *text, ImVec4 color) {
   ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(color.x * .20f, color.y * .20f,

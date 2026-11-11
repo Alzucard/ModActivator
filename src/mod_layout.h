@@ -356,8 +356,7 @@ static void drawSettings(const std::vector<Action> &actions) {
       const auto name = UI::name(action) + " / " + UI::actionName(action);
       ImGui::TextUnformatted(name.c_str());
       if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("%s\n[%s] %s", name.c_str(), action.section.c_str(),
-                          action.key.c_str());
+        UI::bindingTooltip(action);
       ImGui::TableSetColumnIndex(1);
       if (!visible.count(binding)) {
         ImGui::TextDisabled("No card");

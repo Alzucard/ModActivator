@@ -21,6 +21,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 static bool previewMode = false;
 static int previewTab = 0;
@@ -37,6 +38,7 @@ struct Action {
   int typeOverride = 0;
   int menuRank = 0;
   int featureRank = 0;
+  std::string description;
 };
 static std::string read(const Action &a) {
   ++configReads;
@@ -626,8 +628,7 @@ void Render() {
             ImGui::EndDisabled();
             if (!overHandle && !ImGui::GetDragDropPayload() &&
                 ImGui::IsWindowHovered() && !ImGui::IsItemHovered())
-              ImGui::SetTooltip("%s\n%s\n[%s] %s", UI::name(a).c_str(),
-                                detail.c_str(), a.section.c_str(), a.key.c_str());
+              UI::bindingTooltip(a, detail);
             ImGui::EndChild();
             dropOnCard(a, drop);
             ImGui::PopStyleVar(2);
@@ -800,6 +801,28 @@ ModActivatorSettingsTest(const char *root) {
     down = {VK_ESCAPE};
     if (!UI::captureShortcut(field, isHeld).empty() || UI::recording)
       return 14;
+
+    Action stance{"Combat Evolved", "CombatEvolved.asi", "CombatEvolved.ini",
+                  "Controls", "StanceCycleKey"};
+    Action wiki{"CD Wiki", "CDWiki.asi", "CDWiki.ini", "Input", "ToggleKey"};
+    BindingComments notes;
+    notes[{"controls", "stancecyclekey"}] = "Switch between unarmed stances.";
+    notes[{"input", "togglekey"}] = "Open or close the wiki.";
+    for (int type : {0, 1, 2, 3}) {
+      if (!saveBindingType(stance, type) || !saveBindingType(wiki, type))
+        return 15;
+      classifyBinding(stance, notes);
+      classifyBinding(wiki, notes);
+      if (UI::actionName(stance) != "Stance Cycle" || UI::actionName(wiki) != "Toggle" ||
+          stance.description != "Switch between unarmed stances." ||
+          wiki.description != "Open or close the wiki." || stance.typeOverride != type ||
+          wiki.typeOverride != type)
+        return 16;
+    }
+    Action effect{"Weather", "Weather.addon64", "Weather.ini", "General",
+                  "HotkeyToggleEffect"};
+    if (UI::actionName(effect) != "Toggle Effect")
+      return 17;
 
     ModLayout test;
     test.tabs[firstCustomTab] = "Test tab";

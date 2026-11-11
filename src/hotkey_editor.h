@@ -287,8 +287,7 @@ static void drawHotkeys() {
         }
       }
       if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("%s\n[%s] %s", a.file.c_str(), a.section.c_str(),
-                          a.key.c_str());
+        UI::bindingTooltip(a);
       ImGui::TableSetColumnIndex(1);
       ImGui::TextUnformatted(UI::shortcut(a).c_str());
       ImGui::TableSetColumnIndex(2);
