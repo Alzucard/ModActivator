@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.4
+- Record Ctrl, Shift, and Alt combinations in the Hotkeys editor.
+- Display and send punctuation bindings using their physical key position on the active keyboard layout, including Pywel Casino on German keyboards.
+- Add, rename, and delete custom tabs. Move mods between tabs and reorder their entries in Settings.
+- Change the ModActivator shortcut in Settings without restarting.
+
 ## 1.1.3
 - Recognize menu shortcuts described in INI comments, including CDWiki.
 - Set a detected binding to Menu, Toggle, or Hotkeys only from the Hotkeys tab.

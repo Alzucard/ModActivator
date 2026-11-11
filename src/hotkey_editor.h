@@ -14,9 +14,11 @@ static std::string readBytes(const std::string &p) {
     throw std::runtime_error("Cannot read config.");
   return std::string(std::istreambuf_iterator<char>(f), {});
 }
-static std::string encodeBinding(const Action &a, std::string input) {
+static std::string encodeBinding(const Action &a, std::string input,
+                                 std::vector<int> recorded = {}) {
   input = trim(input);
-  if (input.empty() || input.find_first_of("\r\n;=|") != input.npos)
+  if (recorded.empty() &&
+      (input.empty() || input.find_first_of("\r\n;|") != input.npos))
     throw std::runtime_error(
         "Enter one key or combination, such as F6 or Ctrl+F6.");
   if (lower(a.file) == "reshade.ini")
@@ -26,13 +28,33 @@ static std::string encodeBinding(const Action &a, std::string input) {
   std::string base = trim(original.substr(0, bar));
   bool numeric = !base.empty() && isdigit((unsigned char)base[0]) &&
                  base.find(',') == base.npos;
+  if (!recorded.empty()) {
+    // Preserve the modifier flags stored separately by some mods.
+    for (int modifier : keysFrom(a, ""))
+      if (modifier)
+        recorded.erase(std::remove(recorded.begin(), recorded.end() - 1, modifier),
+                       recorded.end() - 1);
+    if (numeric && recorded.size() != 1)
+      throw std::runtime_error("This mod stores a single key code and has separate modifier flags.");
+    if (numeric && recorded.size() == 1) {
+      input = std::to_string(recorded.back());
+    } else {
+      for (int key : recorded) {
+        const auto name = configKeyName(key);
+        if (name.empty())
+          throw std::runtime_error("This key cannot be written in this mod's shortcut format.");
+        if (!input.empty())
+          input += '+';
+        input += name;
+      }
+    }
+  }
   std::string converted = input;
-  if (!numeric && input.find('+') == input.npos && !input.empty() &&
-      isdigit((unsigned char)input[0]))
+  if (!numeric && !input.empty() && isdigit((unsigned char)input[0]))
     throw std::runtime_error(
         "Use a key name such as F8 for a named-key setting.");
   if (numeric) {
-    if (input.find('+') != input.npos)
+    if (parseShortcut(input).size() != 1)
       throw std::runtime_error(
           "This setting stores a plain key code. Enter a single key; existing "
           "modifier flags are preserved.");
@@ -46,12 +68,7 @@ static std::string encodeBinding(const Action &a, std::string input) {
       converted = b;
     } else
       converted = std::to_string(k);
-  } else if (input.find('+') != input.npos && base.find('+') == base.npos)
-    throw std::runtime_error(
-        "This binding has no demonstrated modifier syntax. Use a single key.");
-  else if (lower(a.file) == "reshade.ini")
-    throw std::runtime_error(
-        "Change ReShade shortcuts in its own settings; it rewrites this file.");
+  }
   if (bar != original.npos)
     converted += original.substr(bar);
   auto ks = keysFrom(a, converted);
@@ -67,7 +84,7 @@ static std::string encodeBinding(const Action &a, std::string input) {
   // mods.
   if (!numeric) {
     for (int k : ks)
-      if (k != 16 && k != 17 && k != 18 && keyName(k).empty())
+      if (configKeyName(k).empty())
         throw std::runtime_error("Unsupported key name.");
   }
   return converted;
@@ -167,6 +184,7 @@ static void saveBinding(const Action &a, const std::string &expected,
 static void drawHotkeys() {
   static Action editing;
   static bool selected = false;
+  static std::vector<int> recorded;
   static char entry[128] = "";
   static std::string snapshot, message;
   static bool acknowledge = false;
@@ -199,7 +217,7 @@ static void drawHotkeys() {
     ImGui::TextWrapped("%s", message.c_str());
   float available = ImGui::GetContentRegionAvail().y;
   float listHeight =
-      (std::max)(80.0f, available - (selected ? 290.0f * UI::scale : 0.0f));
+      (std::max)(70.0f, available - (selected ? 300.0f * UI::scale : 0.0f));
   if (ImGui::BeginTable("Bindings", 3,
                         ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg |
                             ImGuiTableFlags_BordersInnerH |
@@ -228,6 +246,8 @@ static void drawHotkeys() {
           snapshot = readBytes(folder + a.file);
           selected = true;
           entry[0] = 0;
+          recorded.clear();
+          UI::recording = 0;
           lastInput = "\x01";
           acknowledge = false;
           message.clear();
@@ -254,6 +274,7 @@ static void drawHotkeys() {
     ImGui::EndTable();
   }
   if (selected) {
+    ImGui::BeginChild("ShortcutEditor");
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
@@ -275,16 +296,27 @@ static void drawHotkeys() {
     }
 
     ImGui::SetNextItemWidth(260 * UI::scale);
-    if (ImGui::InputText("New shortcut", entry, sizeof entry))
+    if (ImGui::InputText("New shortcut", entry, sizeof entry)) {
+      recorded.clear();
+      UI::recording = 0;
       acknowledge = false;
-    ImGui::TextWrapped("Use a key such as F8. Existing modifier flags and "
-                       "controller bindings are preserved.");
+    }
+    if (auto keys = UI::recordShortcut("Record shortcut"); !keys.empty()) {
+      recorded = std::move(keys);
+      entry[0] = 0;
+      lastInput = "\x01";
+      acknowledge = false;
+    }
+    if (!recorded.empty())
+      ImGui::Text("Recorded: %s", shortcutLabel(recorded).c_str());
+    ImGui::TextWrapped("Hold Ctrl, Shift or Alt while pressing the main key. "
+                       "Some mods only support a single key.");
     try {
       if (lastInput != entry) {
         lastInput = entry;
         validationError.clear();
         try {
-          encodedCache = encodeBinding(editing, entry);
+          encodedCache = encodeBinding(editing, entry, recorded);
           proposedCache = keysFrom(editing, encodedCache);
         } catch (const std::exception &e) {
           validationError = e.what();
@@ -294,7 +326,8 @@ static void drawHotkeys() {
         throw std::runtime_error(validationError);
       const auto &encoded = encodedCache;
       const auto &proposed = proposedCache;
-      bool clashes = conflict(proposed, {17, 16, 8}) != 0;
+      const auto ownKeys = openerKeys();
+      bool clashes = conflict(proposed, ownKeys) != 0;
       for (auto &a : list)
         if (identity(a) != identity(editing) &&
             conflict(proposed, a.cachedKeys)) {
@@ -302,8 +335,9 @@ static void drawHotkeys() {
           ImGui::TextColored(ImVec4(1, .6f, .2f, 1), "Overlaps: %s",
                              a.label.c_str());
         }
-      if (conflict(proposed, {17, 16, 8}))
-        ImGui::TextWrapped("Overlaps ModActivator's Ctrl+Shift+Backspace.");
+      if (conflict(proposed, ownKeys))
+        ImGui::TextWrapped("Overlaps ModActivator (%s).",
+                           shortcutLabel(ownKeys).c_str());
       if (clashes)
         ImGui::Checkbox("Save despite overlap", &acknowledge);
       ImGui::BeginDisabled(clashes && !acknowledge);
@@ -324,12 +358,14 @@ static void drawHotkeys() {
       }
       ImGui::EndDisabled();
     } catch (const std::exception &e) {
-      if (entry[0])
+      if (entry[0] || !recorded.empty())
         ImGui::TextWrapped("%s", e.what());
     }
     ImGui::SameLine();
     if (ImGui::Button("Cancel"))
       selected = false;
+    ImGui::EndChild();
+    if (!selected)
+      UI::recording = 0;
   }
 }
-

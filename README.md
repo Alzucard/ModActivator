@@ -1,8 +1,8 @@
-# ModActivator 1.1.3
+# ModActivator 1.1.4
 
 An in-game mod menu and hotkey manager for Crimson Desert.
 
-**Open the panel: Ctrl+Shift+Backspace.**
+**Default shortcut: Ctrl+Shift+Backspace.** Change it under **Settings**.
 
 ## Features
 
@@ -10,7 +10,8 @@ The panel uses a charcoal-and-gold theme with larger text, searchable mod cards,
 
 - **Mod UIs:** one automatically detected menu shortcut per loaded mod.
 - **Toggles:** controls for toggle-only mods. The panel stays open when sending a toggle. State is labeled **Unreported** where a mod has no live-state interface.
-- **Hotkeys:** edit recognized keyboard bindings with config backups. Exact conflicts are red; shared base keys with different modifiers are amber.
+- **Hotkeys:** record key combinations or enter them by name, with config backups. Exact conflicts are red; shared base keys with different modifiers are amber.
+- **Settings:** change the panel shortcut, add or rename tabs, move mods between tabs, and reorder each tab with Up and Down.
 - **On-demand discovery:** scans when the panel opens, when you click **Refresh mods**, and after saving an edit. No periodic five-second scan.
 - Config reads and conflict calculations are cached outside normal menu rendering.
 
@@ -28,9 +29,15 @@ ModActivator uses shortcut names and nearby INI comments to identify menu opener
 
 ## Hotkey edits
 
-Select a binding in **Hotkeys**, enter a supported new shortcut, review conflicts, then save. The original config is backed up beside it as `<config>.modactivator.bak` before its first edit. ModActivator disables activation buttons for edited mods until the game restarts, since it cannot verify live reload support. Until restart, configured conflicts may differ from the running mods' active bindings.
+Select a binding in **Hotkeys** and click **Record shortcut**. Hold Ctrl, Shift, or Alt while pressing the main key. You can also type a shortcut such as Ctrl+F6. Supported formats vary by mod. Numeric settings keep their existing separate modifier flags. Review conflicts, then save. The original config is backed up beside it as `<config>.modactivator.bak` before its first edit. ModActivator disables activation buttons for edited mods until the game restarts, since it cannot verify live reload support. Until restart, configured conflicts may differ from the running mods' active bindings.
 
-ReShade bindings are read-only here; edit them through ReShade.
+Punctuation bindings use US key positions and display the key label for the active Windows layout. For example, Pywel Casino’s configured closing bracket corresponds to the plus key on a German keyboard. ReShade bindings are read-only here. Edit them through ReShade.
+
+## Custom tabs and panel shortcut
+
+In **Settings**, choose **New tab**, enter a name, and click **Add tab**. Use **Mod placement** to choose a tab for each mod and reorder its entries. Deleting a tab returns its mods to their default tabs. Changes are saved in ModActivator.ini.
+
+Use **Record opener** and **Save opener** to change ModActivator’s shortcut immediately. **Use default** restores Ctrl+Shift+Backspace when saved.
 
 ## Discovery and compatibility
 

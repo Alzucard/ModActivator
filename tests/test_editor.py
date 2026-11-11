@@ -20,3 +20,14 @@ for new in ['F4+F5','F5+Ctrl','Ctrl+Ctrl+F5','119']:
  assert r and out==b'[Menu]\nHotkey=Ctrl+F4\n',(new,r,msg)
 assert m.ModActivatorReliabilityTest()==0
 print('PASS: malformed multi-main/repeated/reordered modifiers, ambiguous named numeric, strict ReShade arrays, whitespace and restart queue guard.')
+
+from tempfile import TemporaryDirectory
+with TemporaryDirectory(dir=p) as tmp:
+    fixture = pathlib.Path(tmp)
+    (fixture / 'First.ini').write_text('[Menu]\nHotkey=F8\n')
+    (fixture / 'Second.ini').write_text('[Menu]\nHotkey=0x77\nRequireCtrl=1\n')
+    settings = m.ModActivatorSettingsTest
+    settings.argtypes = [ctypes.c_char_p]
+    result = settings((str(fixture) + '\\').encode())
+    assert result == 0, f'Settings regression check failed at step {result}'
+print('PASS: recorded chords, numeric modifier retention, keyboard layout mapping, saved opener, tab assignment and order.')

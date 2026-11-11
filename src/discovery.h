@@ -323,9 +323,10 @@ static void refresh() {
             return lower(a.module) == lower(b.module);
           }))
         found.push_back(a);
+    const auto ownKeys = openerKeys();
     for (size_t i = 0; i < all.size(); ++i) {
       auto &a = all[i];
-      a.severity = conflict(a.cachedKeys, {17, 16, 8});
+      a.severity = conflict(a.cachedKeys, ownKeys);
       if (a.severity)
         a.overlapNames = "ModActivator\n";
       for (size_t j = 0; j < all.size(); ++j)
@@ -344,4 +345,3 @@ static void refresh() {
     LOG_ERR("Discovery failed: %s", e.what());
   }
 }
-

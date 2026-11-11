@@ -15,6 +15,12 @@ static std::string keyName(int k) {
     return "Tab";
   case 13:
     return "Enter";
+  case VK_SHIFT:
+    return "Shift";
+  case VK_CONTROL:
+    return "Ctrl";
+  case VK_MENU:
+    return "Alt";
   case 19:
     return "Pause";
   case 20:
@@ -52,8 +58,72 @@ static std::string keyName(int k) {
   }
   return {};
 }
+static std::string configKeyName(int key) {
+  if (isOemKey(key)) {
+    const auto scan = MapVirtualKeyExW(key, MAPVK_VK_TO_VSC_EX, gameKeyboardLayout());
+    for (const auto &entry : punctuation)
+      if (entry.scan == scan && entry.symbol != ';')
+        return entry.scan == 0x29 ? "Grave" : std::string(1, entry.symbol);
+    return {};
+  }
+  return keyName(key);
+}
+static std::string shortcutLabel(const std::vector<int> &keys) {
+  std::string out;
+  for (int k : keys) {
+    if (!out.empty())
+      out += " + ";
+    auto label = isOemKey(k) ? localizedKey(k) : keyName(k);
+    out += label.empty() ? "VK " + std::to_string(k) : label;
+  }
+  return out;
+}
 
 namespace UI {
+static ImGuiID recording = 0;
+static bool waitingForRelease = false;
+static std::vector<int> recordShortcut(const char *label) {
+  const auto id = ImGui::GetID(label);
+  if (ImGui::Button(recording == id ? "Press shortcut...##Recording" : label)) {
+    recording = id;
+    waitingForRelease = true;
+  }
+  if (recording != id)
+    return {};
+  if (held(VK_ESCAPE)) {
+    recording = 0;
+    return {};
+  }
+  ImGui::SameLine();
+  ImGui::TextDisabled("Esc cancels");
+  int main = 0;
+  for (int key = VK_BACK; key <= VK_OEM_102; ++key) {
+    if ((keyName(key).empty() && !isOemKey(key)) ||
+        key == VK_CONTROL || key == VK_SHIFT || key == VK_MENU || !held(key))
+      continue;
+    if (main)
+      return {};
+    main = key;
+  }
+  const auto modifiers = heldModifiers();
+  if (waitingForRelease) {
+    if (!main && !modifiers)
+      waitingForRelease = false;
+    return {};
+  }
+  if (!main || held(VK_LWIN) || held(VK_RWIN))
+    return {};
+  recording = 0;
+  std::vector<int> result;
+  if (modifiers & (1u << 8))
+    result.push_back(VK_CONTROL);
+  if (modifiers & (1u << 9))
+    result.push_back(VK_SHIFT);
+  if (modifiers & (1u << 10))
+    result.push_back(VK_MENU);
+  result.push_back(main);
+  return result;
+}
 static float scale = 1.0f;
 static char search[128] = "";
 static const ImVec4 gold{0.84f, 0.69f, 0.43f, 1.0f},
@@ -97,12 +167,7 @@ static bool matches(const Action &a) {
                                .find(lower(search)) != std::string::npos;
 }
 static std::string shortcut(const Action &a) {
-  std::string out;
-  for (int k : a.cachedKeys) {
-    if (!out.empty())
-      out += " + ";
-    out += k == 17 ? "Ctrl" : k == 16 ? "Shift" : k == 18 ? "Alt" : keyName(k);
-  }
+  auto out = shortcutLabel(a.cachedKeys);
   return out.empty() ? a.cachedValue : out;
 }
 static void badge(const char *text, ImVec4 color) {

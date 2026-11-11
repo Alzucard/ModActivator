@@ -17,6 +17,7 @@
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <mutex>
+#include <map>
 #include <set>
 #include <string>
 #include <vector>
@@ -44,7 +45,8 @@ static std::string read(const Action &a) {
   return b;
 }
 static bool held(int k) { return (GetAsyncKeyState(k) & 0x8000) != 0; }
-static int vk(std::string s) {
+#include "shortcut_keys.h"
+static int vk(std::string s, HKL layout = gameKeyboardLayout()) {
   s.erase(std::remove_if(s.begin(), s.end(),
                          [](unsigned char c) { return c == ' '; }),
           s.end());
@@ -59,7 +61,7 @@ static int vk(std::string s) {
   if (s == "ALT")
     return 18;
   if (s == "GRAVE")
-    return 192;
+    return punctuationVk(0x29, layout);
   if (s == "HOME")
     return 36;
   if (s == "END")
@@ -110,8 +112,15 @@ static int vk(std::string s) {
     long v = strtol(s.c_str(), &end, s.size() > 2 && s[1] == 'X' ? 16 : 10);
     return end && !*end && v >= 0 && v <= 255 ? (int)v : 0;
   }
-  if (s.size() == 1)
-    return s[0];
+  if (s.size() == 1) {
+    for (const auto &key : punctuation)
+      if (s[0] == key.symbol)
+        return punctuationVk(key.scan, layout);
+    if (s[0] == '+')
+      return punctuationVk(0x0D, layout);
+    if (s[0] >= 'A' && s[0] <= 'Z')
+      return s[0];
+  }
   return 0;
 }
 static bool validShortcut(const std::vector<int> &ks) {
@@ -127,6 +136,57 @@ static bool validShortcut(const std::vector<int> &ks) {
       return false;
   }
   return true;
+}
+static std::vector<int> parseShortcut(std::string s) {
+  s.erase(std::remove_if(s.begin(), s.end(),
+                         [](unsigned char c) { return c == ' ' || c == 9; }),
+          s.end());
+  std::vector<int> out;
+  size_t pos = 0;
+  while (true) {
+    // A final literal plus can also be the main key (for example Ctrl++).
+    size_t end = pos + 1 == s.size() && s[pos] == '+' ? s.npos : s.find('+', pos);
+    auto token = s.substr(pos, end == s.npos ? end : end - pos);
+    out.push_back(pos != 0 && token.size() == 1 && isdigit(token[0])
+                      ? token[0]
+                      : vk(token));
+    if (end == s.npos)
+      return out;
+    pos = end + 1;
+  }
+}
+static constexpr unsigned defaultOpener = VK_BACK | (1u << 8) | (1u << 9);
+static std::atomic<unsigned> opener{defaultOpener};
+static unsigned shortcutCode(const std::vector<int> &keys) {
+  if (!validShortcut(keys))
+    return 0;
+  unsigned code = keys.back();
+  for (int k : keys) {
+    if (k == VK_CONTROL)
+      code |= 1u << 8;
+    if (k == VK_SHIFT)
+      code |= 1u << 9;
+    if (k == VK_MENU)
+      code |= 1u << 10;
+  }
+  return code;
+}
+static std::vector<int> openerKeys() {
+  auto code = opener.load();
+  std::vector<int> keys;
+  if (code & (1u << 8))
+    keys.push_back(VK_CONTROL);
+  if (code & (1u << 9))
+    keys.push_back(VK_SHIFT);
+  if (code & (1u << 10))
+    keys.push_back(VK_MENU);
+  keys.push_back(code & 0xff);
+  return keys;
+}
+static unsigned heldModifiers() {
+  return (held(VK_CONTROL) ? 1u << 8 : 0) |
+         (held(VK_SHIFT) ? 1u << 9 : 0) |
+         (held(VK_MENU) ? 1u << 10 : 0);
 }
 static std::vector<int> keysFrom(const Action &a, std::string s) {
   configReads += 3;
@@ -144,9 +204,7 @@ static std::vector<int> keysFrom(const Action &a, std::string s) {
     if (GetPrivateProfileIntA(a.section.c_str(), pair.first, 0,
                               (folder + a.file).c_str()))
       out.push_back(pair.second);
-  if (s.find(',') != std::string::npos) {
-    if (_stricmp(a.file.c_str(), "ReShade.ini"))
-      return {};
+  if (!_stricmp(a.file.c_str(), "ReShade.ini")) {
     int k = 0, c = 0, sh = 0, al = 0, used = 0;
     if (sscanf(s.c_str(), "%d,%d,%d,%d%n", &k, &c, &sh, &al, &used) != 4 ||
         used != (int)s.size() || c < 0 || c > 1 || sh < 0 || sh > 1 || al < 0 ||
@@ -161,18 +219,8 @@ static std::vector<int> keysFrom(const Action &a, std::string s) {
     out.push_back(k);
     return out;
   }
-  size_t pos = 0;
-  while (true) {
-    size_t end = s.find('+', pos);
-    auto token = s.substr(pos, end == std::string::npos ? end : end - pos);
-    out.push_back(s.find('+') != std::string::npos && token.size() == 1 &&
-                          isdigit(token[0])
-                      ? token[0]
-                      : vk(token));
-    if (end == std::string::npos)
-      break;
-    pos = end + 1;
-  }
+  auto named = parseShortcut(s);
+  out.insert(out.end(), named.begin(), named.end());
   return out;
 }
 static std::vector<int> keys(const Action &a) { return keysFrom(a, read(a)); }
@@ -192,15 +240,25 @@ void Write(const char *level, const char *fmt, ...) {
 } // namespace ml::Log
 #include "discovery.h"
 #include "hotkey_editor.h"
-#include "ui_helpers.h"
-static bool key(int k, bool up) {
+#include "mod_layout.h"
+static bool key(int k, bool up, HKL layout) {
   INPUT i{};
   i.type = INPUT_KEYBOARD;
   i.ki.dwExtraInfo = 0x4D414354;
   i.ki.wVk = (WORD)k;
   i.ki.dwFlags = up ? KEYEVENTF_KEYUP : 0;
-  if (k >= 33 && k <= 46)
+  if (isOemKey(k)) {
+    const auto scan = MapVirtualKeyExW(k, MAPVK_VK_TO_VSC_EX, layout);
+    if (scan) {
+      i.ki.wVk = 0;
+      i.ki.wScan = (WORD)(scan & 0xff);
+      i.ki.dwFlags |= KEYEVENTF_SCANCODE;
+      if ((scan & 0xff00) == 0xe000)
+        i.ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
+    }
+  } else if (k >= 33 && k <= 46) {
     i.ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
+  }
   return SendInput(1, &i, sizeof i) == 1;
 }
 static DWORD WINAPI dispatch(void *) {
@@ -238,16 +296,17 @@ static DWORD WINAPI dispatch(void *) {
       if (valid && ml::State::ForegroundIsOurs() && !held(16) && !held(17) &&
           !held(18) && !held(1)) {
         ml::State::Get().keyboardPassthrough.store(a.toggle);
+        const auto layout = gameKeyboardLayout();
         size_t pressed = 0;
         for (int k : ks) {
-          if (!ml::State::ForegroundIsOurs() || !key(k, false))
+          if (!ml::State::ForegroundIsOurs() || !key(k, false, layout))
             break;
           ++pressed;
         }
         bool complete = pressed == ks.size();
         Sleep(130);
         while (pressed)
-          key(ks[--pressed], true);
+          key(ks[--pressed], true, layout);
         ml::State::Get().keyboardPassthrough.store(false);
         if (complete)
           LOG("Shortcut dispatched: %s", a.label.c_str());
@@ -326,19 +385,32 @@ bool FontsNeedRebuild() { return false; }
 void RebuildFonts() {}
 void PollToggle() {
   static bool was = false;
-  bool now = held(17) && held(16) && held(VK_BACK) && !held(VK_MENU) &&
-             !held(VK_LWIN) && !held(VK_RWIN);
+  const auto code = opener.load();
+  const bool now = held(code & 0xff) && heldModifiers() == (code & ~0xffu) &&
+                   !held(VK_LWIN) && !held(VK_RWIN);
   auto &s = State::Get();
   if (State::ForegroundIsOurs()) {
-    if (now && !was) {
+    static HKL lastLayout = nullptr;
+    if (s.menuOpen) {
+      const auto layout = gameKeyboardLayout();
+      if (layout != lastLayout)
+        refreshRequested.store(true);
+      lastLayout = layout;
+    }
+    if (now && !was && !UI::recording) {
       s.menuOpen = !s.menuOpen;
       if (s.menuOpen)
         refreshRequested.store(true);
     }
-    if (s.menuOpen && held(VK_ESCAPE))
+    static bool escapeWas = false;
+    const bool escape = held(VK_ESCAPE);
+    if (s.menuOpen && escape && !escapeWas && !UI::recording)
       s.menuOpen = false;
-  } else
+    escapeWas = escape;
+  } else {
     s.menuOpen = false;
+    UI::recording = 0;
+  }
   was = now;
 }
 bool WantsDraw() { return State::Get().menuOpen; }
@@ -396,35 +468,50 @@ void Render() {
       actions = catalog;
       restarts = restartRequired;
     }
-    int menus = 0, toggles = 0;
-    for (auto &a : actions)
-      (a.toggle ? toggles : menus)++;
+    orderActions(actions);
+    std::map<int, std::string> tabs{{0, "Mod menus"}, {1, "Toggles"}, {2, "Hotkeys"}};
+    tabs.insert(modLayout.tabs.begin(), modLayout.tabs.end());
+    constexpr int settingsTab = 65536;
+    tabs.emplace(settingsTab, "Settings");
+    std::map<int, int> counts;
+    for (const auto &a : actions)
+      ++counts[actionTab(a)];
     ImGui::Spacing();
     if (ImGui::BeginTabBar("Categories",
-                           ImGuiTabBarFlags_NoCloseWithMiddleMouseButton)) {
-      for (int tab = 0; tab < 3; ++tab) {
-        std::string title = tab == 2   ? "Hotkeys"
-                            : tab == 1 ? "Toggles  " + std::to_string(toggles)
-                                       : "Mod menus  " + std::to_string(menus);
+                           ImGuiTabBarFlags_NoCloseWithMiddleMouseButton |
+                               ImGuiTabBarFlags_FittingPolicyScroll)) {
+      static int lastTab = -1;
+      for (const auto &[tab, name] : tabs) {
+        const std::string count = tab == 2 || tab == settingsTab
+                                      ? "" : "  " + std::to_string(counts[tab]);
+        const std::string title = name + count + "###Category" + std::to_string(tab);
         if (ImGui::BeginTabItem(title.c_str(), nullptr,
                                 previewMode && previewTab == tab
                                     ? ImGuiTabItemFlags_SetSelected
                                     : 0)) {
-          if (tab == 2) {
-            drawHotkeys();
+          if (lastTab != tab) {
+            UI::recording = 0;
+            lastTab = tab;
+          }
+          if (tab == 2 || tab == settingsTab) {
+            if (tab == 2)
+              drawHotkeys();
+            else
+              drawSettings(actions);
             ImGui::EndTabItem();
             continue;
           }
           ImGui::Spacing();
           ImGui::TextDisabled(
-              tab ? "Toggle features without leaving this panel."
-                  : "Open a mod's settings with its configured shortcut.");
+              tab == 0 ? "Open a mod's settings with its configured shortcut."
+              : tab == 1 ? "Toggle features without leaving this panel."
+                         : "Manage this tab from Settings.");
           ImGui::Spacing();
           ImGui::BeginChild("ModList", ImVec2(0, -34 * u), false);
           int count = 0;
           for (size_t i = 0; i < actions.size(); ++i) {
             auto &a = actions[i];
-            if (a.toggle != (tab == 1) || !UI::matches(a))
+            if (actionTab(a) != tab || !UI::matches(a))
               continue;
             ++count;
             ImGui::PushID((int)i);
@@ -483,15 +570,18 @@ void Render() {
           }
           ImGui::EndChild();
           ImGui::Separator();
-          ImGui::TextDisabled(
-              tab ? "Toggle status is unverified unless the mod reports it."
-                  : "Ctrl + Shift + Backspace to close");
+          if (tab == 1)
+            ImGui::TextDisabled("Toggle status is unverified unless the mod reports it.");
+          else
+            ImGui::TextDisabled("%s to close", shortcutLabel(openerKeys()).c_str());
           ImGui::EndTabItem();
         }
       }
       ImGui::EndTabBar();
     }
   }
+  if (!open)
+    UI::recording = 0;
   s.menuOpen = open;
   ImGui::End();
 }
@@ -506,12 +596,11 @@ static DWORD WINAPI start(void *arg) {
   GetModuleFileNameA((HMODULE)arg, p, MAX_PATH);
   folder = std::string(p);
   folder = folder.substr(0, folder.find_last_of("\\/") + 1);
+  loadLayout();
   ml::Settings::Get().wrapSwapChain =
       GetPrivateProfileIntA("General", "WrapSwapChain", 0,
                             (folder + "ModActivator.ini").c_str()) != 0;
-  LOG("Mod Activator " MODACTIVATOR_VERSION
-      " reliability fixes. Activation only; no gameplay "
-      "hooks.");
+  LOG("Mod Activator " MODACTIVATOR_VERSION " started.");
   if (MH_Initialize() != MH_OK)
     return 0;
   if (!ml::hooks::InstallDX12Hooks())
@@ -564,6 +653,61 @@ extern "C" __declspec(dllexport) int ModActivatorReliabilityTest() {
     return 8;
   hasPending = false;
   return 0;
+}
+extern "C" __declspec(dllexport) int
+ModActivatorSettingsTest(const char *root) {
+  if (!folder.empty() || !root)
+    return -1;
+  folder = root;
+  const int result = [] {
+    const int count = GetKeyboardLayoutList(0, nullptr);
+    std::vector<HKL> layouts(count);
+    GetKeyboardLayoutList(count, layouts.data());
+    for (auto layout : layouts)
+      if (LOWORD(reinterpret_cast<ULONG_PTR>(layout)) == 0x0407) {
+        const auto key = vk("]", layout);
+        if (key != VK_OEM_PLUS || localizedKey(key, layout) != "+")
+          return 1;
+      }
+
+    Action first{"First", "First.asi", "First.ini", "Menu", "Hotkey"};
+    Action second{"Second", "Second.asi", "Second.ini", "Menu", "Hotkey"};
+    Action third{"Third", "Third.asi", "Third.ini", "Menu", "Hotkey"};
+    if (encodeBinding(first, "", {VK_CONTROL, VK_SHIFT, VK_F6}) != "Ctrl+Shift+F6")
+      return 2;
+    if (encodeBinding(second, "", {VK_CONTROL, VK_F6}) != "0x75")
+      return 3;
+
+    ModLayout test;
+    test.tabs[firstCustomTab] = "Test tab";
+    placementFor(test, identity(second)).tab = firstCustomTab;
+    placementFor(test, identity(first)).tab = firstCustomTab;
+    if (!saveLayout(std::move(test)) || !saveOpener({VK_CONTROL, VK_BACK}))
+      return 4;
+    opener.store(defaultOpener);
+    modLayout = {};
+    loadLayout();
+    if (openerKeys() != std::vector<int>{VK_CONTROL, VK_BACK} ||
+        modLayout.tabs[firstCustomTab] != "Test tab" ||
+        actionTab(first) != firstCustomTab || actionTab(third) != 0)
+      return 5;
+    std::vector<Action> actions{first, second, third};
+    orderActions(actions);
+    if (actions.front().module != second.module || actions.back().module != third.module)
+      return 6;
+
+    if (!saveLayout({}))
+      return 7;
+    loadLayout();
+    if (!modLayout.tabs.empty() || !modLayout.placements.empty())
+      return 8;
+    return 0;
+  }();
+  folder.clear();
+  opener.store(defaultOpener);
+  modLayout = {};
+  refreshRequested.store(false);
+  return result;
 }
 extern "C" __declspec(dllexport) int ModActivatorSelfTest() {
   if (sizeof(INPUT) != 40 || vk("F8") != 119 || vk("0x78") != 120 ||
@@ -872,4 +1016,3 @@ extern "C" __declspec(dllexport) int ModActivatorScrollTest() {
   ImGui::DestroyContext(context);
   return result;
 }
-
