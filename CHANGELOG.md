@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.1
+- Wait until the first menu open to allocate DirectX overlay resources and acquire swapchain buffers.
+- Read the optional EnableDred setting for GPU crash diagnostics.
+
 ## 1.2.0
 - Queue mod actions in click order and keep dispatched shortcuts from opening ModActivator or entering its recorder.
 - Scan configs once per refresh and avoid false conflicts from duplicate entries.

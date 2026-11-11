@@ -455,7 +455,8 @@ void PollToggle() {
         refreshRequested.store(true);
       lastLayout = layout;
     }
-    const bool textEditing = s.menuOpen && ImGui::GetIO().WantTextInput;
+    const bool textEditing = s.menuOpen && ImGui::GetCurrentContext() &&
+                             ImGui::GetIO().WantTextInput;
     const bool acceptsShortcut = !UI::recording && !textEditing && !s.sendingShortcut;
     if (now && !was && acceptsShortcut) {
       s.menuOpen = !s.menuOpen;
@@ -662,9 +663,11 @@ static DWORD WINAPI start(void *arg) {
   folder = std::string(p);
   folder = folder.substr(0, folder.find_last_of("\\/") + 1);
   loadLayout();
+  const auto config = folder + "ModActivator.ini";
   ml::Settings::Get().wrapSwapChain =
-      GetPrivateProfileIntA("General", "WrapSwapChain", 0,
-                            (folder + "ModActivator.ini").c_str()) != 0;
+      GetPrivateProfileIntA("General", "WrapSwapChain", 0, config.c_str()) != 0;
+  ml::Settings::Get().enableDred =
+      GetPrivateProfileIntA("General", "EnableDred", 0, config.c_str()) != 0;
   LOG("Mod Activator " MODACTIVATOR_VERSION " started.");
   if (MH_Initialize() != MH_OK)
     return 0;

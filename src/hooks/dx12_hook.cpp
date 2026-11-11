@@ -971,14 +971,14 @@ namespace ml::hooks
     // Returns whether a frame was actually submitted (for the post-present device
     // check). isGameFacing is false for native presents while a wrapper owns the
     // drawing - those are Streamline's read-only finished frames, left untouched.
-    static bool RenderOverlay(IDXGISwapChain3* swapChain, bool isGameFacing)
+    static bool RenderOverlay(IDXGISwapChain3* swapChain, bool isGameFacing, UINT flags)
     {
         // Counted before anything can refuse: every path that could draw comes
         // through here, so this is the one number that says whether this mod is
         // on the screen at all. OverlayBlindWatch reads it.
         g_presentSeen.fetch_add(1, std::memory_order_relaxed);
 
-        if (!isGameFacing)
+        if (!isGameFacing || (flags & DXGI_PRESENT_TEST))
             return false;
 
 #ifdef ML_NO_DRAW
@@ -1009,41 +1009,46 @@ namespace ml::hooks
         return false;
 #endif
 
-        if (!g_imguiReady && !g_initFailed)
-        {
-            // Init needs only the swapchain (device comes from it). The present
-            // queue is captured separately by hkExecuteCommandLists.
-            // Said before the attempt, not after: a Proton log for issue #15
-            // ended at the same second the first frame was due, with no fault
-            // line, and nothing recorded whether this had started.
-            LOG("[overlay] first frame through %s; initialising the menu renderer", g_wrapperActive ? "the wrapper" : "the stacked detour");
-            if (InitImGui(swapChain))
-                g_imguiReady = true;
-            else
-            {
-                g_initFailed = true;
-                LOG_ERR("Overlay init failed - Master Looter's menu is disabled for this session.");
-            }
-        }
-
-        if (!g_imguiReady || g_renderDisabled)
+        if (g_initFailed || g_renderDisabled)
             return false;
 
-        // Hook the game's XInput module once it has loaded (no-op thereafter) so
-        // controller input is blocked from the game while the menu is up.
-        hooks::EnsureXInputHooks();
-
+        // Other graphics mods may be creating devices and resizing their
+        // swapchains at startup. Don't take back-buffer references until the
+        // player requests the overlay.
         gui::PollToggle();
-
         if (!gui::WantsDraw())
         {
-            gui::FeedInput();
+            if (g_imguiReady)
+                gui::FeedInput();
             return false;
         }
 
         bool drew = false;
         __try
         {
+            if (!g_imguiReady)
+            {
+                DXGI_SWAP_CHAIN_DESC desc = {};
+                if (FAILED(swapChain->GetDesc(&desc)) || !desc.OutputWindow ||
+                    !desc.BufferCount ||
+                    GetAncestor(desc.OutputWindow, GA_ROOT) != GetForegroundWindow())
+                    return false;
+
+                LOG("[overlay] Menu requested; initialising the renderer.");
+                if (!InitImGui(swapChain))
+                {
+                    g_initFailed = true;
+                    State::Get().menuOpen = false;
+                    CleanupRenderTargets();
+                    ReleaseOffscreenTarget();
+                    LOG_ERR("ModActivator overlay initialization failed.");
+                    return false;
+                }
+                g_imguiReady = true;
+            }
+
+            // This also covers XInput modules loaded after the first opening.
+            hooks::EnsureXInputHooks();
             drew = DrawOverlay(swapChain);
             // Proof the render path is alive. State::Captures reads this so an
             // overlay that stops drawing releases the pad instead of holding it
@@ -1056,6 +1061,7 @@ namespace ml::hooks
             LOG_ERR("Overlay crashed (exception 0x%08X) - overlay disabled, game continues.",
                     GetExceptionCode());
             g_renderDisabled = true;
+            State::Get().menuOpen = false;
         }
         return drew;
     }
@@ -1169,7 +1175,7 @@ namespace ml::hooks
     // untouched - under DLSS-G the native present is Streamline's read-only frame.
     static HRESULT WINAPI hkPresent(IDXGISwapChain3* swapChain, UINT syncInterval, UINT flags)
     {
-        const bool drew = RenderOverlay(swapChain, !g_wrapperActive);
+        const bool drew = RenderOverlay(swapChain, !g_wrapperActive, flags);
         const HRESULT hr = oPresent(swapChain, syncInterval, flags);
         PostPresentDeviceCheck(drew);
         return hr;
@@ -1181,7 +1187,7 @@ namespace ml::hooks
     {
         // Only reached on the stacked path (see the factory hook), where the
         // chain is the game's own IDXGISwapChain4 and the cast holds.
-        const bool drew = RenderOverlay(static_cast<IDXGISwapChain3*>(swapChain), !g_wrapperActive);
+        const bool drew = RenderOverlay(static_cast<IDXGISwapChain3*>(swapChain), !g_wrapperActive, flags);
         const HRESULT hr = oPresent1(swapChain, syncInterval, flags, pp);
         PostPresentDeviceCheck(drew);
         return hr;
@@ -1642,7 +1648,7 @@ namespace ml::hooks
         // IDXGISwapChain ----------------------------------------------------
         HRESULT STDMETHODCALLTYPE Present(UINT syncInterval, UINT flags) override
         {
-            const bool drew = RenderOverlay(m_inner, true);
+            const bool drew = RenderOverlay(m_inner, true, flags);
             const HRESULT hr = m_inner->Present(syncInterval, flags);
             PostPresentDeviceCheck(drew);
             return hr;
@@ -1670,7 +1676,7 @@ namespace ml::hooks
         HRESULT STDMETHODCALLTYPE GetCoreWindow(REFIID riid, void** pp) override { return m_inner->GetCoreWindow(riid, pp); }
         HRESULT STDMETHODCALLTYPE Present1(UINT syncInterval, UINT flags, const DXGI_PRESENT_PARAMETERS* pp) override
         {
-            const bool drew = RenderOverlay(m_inner, true);
+            const bool drew = RenderOverlay(m_inner, true, flags);
             const HRESULT hr = m_inner->Present1(syncInterval, flags, pp);
             PostPresentDeviceCheck(drew);
             return hr;
