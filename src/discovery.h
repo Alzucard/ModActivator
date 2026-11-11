@@ -1,4 +1,8 @@
 #pragma once
+#include <fstream>
+#include <map>
+#include <regex>
+#include <sstream>
 static std::mutex catalogMutex;
 static std::vector<Action> catalog, allBindings;
 static Action pendingAction;
@@ -83,6 +87,102 @@ static bool validKeys(const Action &a) { return validShortcut(keys(a)); }
 static std::string identity(const Action &a) {
   return lower(a.file + "|" + a.section + "|" + a.key);
 }
+// Overrides belong to ModActivator, keyed by the config path, section and field.
+static int readBindingType(const Action &action) {
+  return GetPrivateProfileIntA("BindingTypes", identity(action).c_str(), 0,
+                               (folder + "ModActivator.ini").c_str());
+}
+
+static bool saveBindingType(const Action &action, int type) {
+  const auto value = std::to_string(type);
+  return WritePrivateProfileStringA("BindingTypes", identity(action).c_str(),
+                                    type ? value.c_str() : nullptr,
+                                    (folder + "ModActivator.ini").c_str()) != FALSE;
+}
+
+static std::string trimConfigLine(const std::string &line) {
+  auto start = line.find_first_not_of(" \t\r\n");
+  if (start == line.npos)
+    return {};
+  return line.substr(start, line.find_last_not_of(" \t\r\n") - start + 1);
+}
+
+using BindingComments = std::map<std::pair<std::string, std::string>, std::string>;
+
+static BindingComments readBindingComments(const std::filesystem::path &path) {
+  std::ifstream file(path, std::ios::binary | std::ios::ate);
+  if (!file || file.tellg() > 1024 * 1024 || file.tellg() < 0)
+    return {};
+  std::string content(static_cast<size_t>(file.tellg()), '\0');
+  file.seekg(0);
+  if (!file.read(content.data(), content.size()))
+    return {};
+  if (content.compare(0, 3, "\xef\xbb\xbf") == 0)
+    content.erase(0, 3);
+  else if (content.compare(0, 2, "\xff\xfe") == 0 ||
+           content.compare(0, 2, "\xfe\xff") == 0) {
+    const bool littleEndian = static_cast<unsigned char>(content[0]) == 0xff;
+    std::string ascii;
+    for (size_t i = 2; i + 1 < content.size(); i += 2) {
+      const auto low = static_cast<unsigned char>(content[i + (littleEndian ? 0 : 1)]);
+      const auto high = content[i + (littleEndian ? 1 : 0)];
+      ascii += !high && low < 128 ? static_cast<char>(low) : ' ';
+    }
+    content = std::move(ascii);
+  }
+
+  BindingComments comments;
+  std::istringstream lines(content);
+  std::string line, section, previousComment;
+  while (std::getline(lines, line)) {
+    line = trimConfigLine(line);
+    if (line.empty()) {
+      previousComment.clear();
+    } else if (line[0] == ';' || line[0] == '#') {
+      previousComment = line.substr(1);
+    } else if (line[0] == '[') {
+      const auto end = line.find(']');
+      section = end == line.npos ? "" : lower(trimConfigLine(line.substr(1, end - 1)));
+      previousComment.clear();
+    } else {
+      const auto equals = line.find('=');
+      if (equals != line.npos && !section.empty()) {
+        const auto inlineComment = line.find(';', equals + 1);
+        if (inlineComment != line.npos)
+          previousComment += " " + line.substr(inlineComment + 1);
+        if (!previousComment.empty())
+          comments[{section, lower(trimConfigLine(line.substr(0, equals)))}] =
+              previousComment;
+      }
+      previousComment.clear();
+    }
+  }
+  return comments;
+}
+
+static void classifyBinding(Action &action, const BindingComments &comments) {
+  action.typeOverride = readBindingType(action);
+  if (action.typeOverride >= 1 && action.typeOverride <= 3) {
+    action.menuRank = action.typeOverride == 1 ? 200 : 0;
+    action.featureRank = action.typeOverride == 2 ? 200 : 0;
+    return;
+  }
+  action.typeOverride = 0;
+  action.menuRank = uiRank(action.section, action.key);
+  action.featureRank = toggleRank(action.section, action.key);
+
+  // Look for the action and its object together. A mention of a menu alone
+  // could describe where a gameplay shortcut works.
+  static const std::regex opensInterface(
+      R"(\b(?:open(?:s|/close)?|close[sd]?|show[s]?|hide[s]?|toggle[s]?)\s+(?:(?:the|a|an|mod|settings|in-game|in game)\s+)*(?:menu|gui|ui|window|panel|overlay|wiki|journal|interface)\b)",
+      std::regex::icase | std::regex::optimize);
+  const auto comment = comments.find({lower(action.section), lower(action.key)});
+  if (comment != comments.end() && std::regex_search(comment->second, opensInterface)) {
+    action.menuRank = 120;
+    action.featureRank = 0;
+  }
+}
+
 static std::string moduleFor(const std::filesystem::path &rel,
                              const std::vector<std::string> &mods) {
   auto stem = lower(rel.stem().string());
@@ -133,6 +233,7 @@ static std::vector<Action> discover(const std::vector<std::string> &mods,
     if (module.empty() || lower(module) == "modactivator.asi")
       continue;
     auto file = rel.generic_string();
+    const auto comments = readBindingComments(it->path());
     char sections[65536];
     DWORD count = GetPrivateProfileSectionNamesA(sections, sizeof sections,
                                                  it->path().string().c_str());
@@ -150,9 +251,7 @@ static std::vector<Action> discover(const std::vector<std::string> &mods,
         if (sep == entry.npos)
           continue;
         auto field = entry.substr(0, sep);
-        if (!(toggles == 2
-                  ? bindingField(field)
-                  : (toggles ? toggleRank(sec, field) : uiRank(sec, field))))
+        if (!bindingField(field) && !uiRank(sec, field) && !toggleRank(sec, field))
           continue;
         // A single modifier flag is supported; unknown modifier metadata is
         // skipped, rather than sending a possibly incomplete combination.
@@ -165,7 +264,11 @@ static std::vector<Action> discover(const std::vector<std::string> &mods,
                  file,
                  sec,
                  field,
-                 toggles == 1};
+                 false};
+        classifyBinding(a, comments);
+        if (toggles != 2 && !(toggles ? a.featureRank : a.menuRank))
+          continue;
+        a.toggle = a.featureRank > 0;
         if (!validKeys(a))
           continue;
         a.cachedValue = read(a);
@@ -181,10 +284,8 @@ static std::vector<Action> discover(const std::vector<std::string> &mods,
               auto am = lower(a.module), bm = lower(b.module);
               if (am != bm)
                 return am < bm;
-              int ar = toggles ? toggleRank(a.section, a.key)
-                               : uiRank(a.section, a.key),
-                  br = toggles ? toggleRank(b.section, b.key)
-                               : uiRank(b.section, b.key);
+              int ar = toggles == 2 ? 0 : (toggles ? a.featureRank : a.menuRank);
+              int br = toggles == 2 ? 0 : (toggles ? b.featureRank : b.menuRank);
               if (ar != br)
                 return ar > br;
               return identity(a) < identity(b);
@@ -218,7 +319,7 @@ static void refresh() {
     auto all = discover(mods, 2);
     auto toggles = discover(mods, true);
     for (auto &a : toggles)
-      if (std::none_of(found.begin(), found.end(), [&](const Action &b) {
+      if (a.typeOverride == 2 || std::none_of(found.begin(), found.end(), [&](const Action &b) {
             return lower(a.module) == lower(b.module);
           }))
         found.push_back(a);
@@ -243,3 +344,4 @@ static void refresh() {
     LOG_ERR("Discovery failed: %s", e.what());
   }
 }
+

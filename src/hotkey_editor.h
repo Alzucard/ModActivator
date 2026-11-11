@@ -199,7 +199,7 @@ static void drawHotkeys() {
     ImGui::TextWrapped("%s", message.c_str());
   float available = ImGui::GetContentRegionAvail().y;
   float listHeight =
-      (std::max)(80.0f, available - (selected ? 250.0f * UI::scale : 0.0f));
+      (std::max)(80.0f, available - (selected ? 290.0f * UI::scale : 0.0f));
   if (ImGui::BeginTable("Bindings", 3,
                         ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg |
                             ImGuiTableFlags_BordersInnerH |
@@ -261,6 +261,19 @@ static void drawHotkeys() {
     ImGui::SameLine();
     ImGui::TextUnformatted(UI::name(editing).c_str());
     ImGui::TextDisabled("Current: %s", UI::shortcut(editing).c_str());
+    const char *types[] = {"Automatic", "Menu", "Toggle", "Hotkeys only"};
+    int type = editing.typeOverride;
+    ImGui::SetNextItemWidth(180 * UI::scale);
+    if (ImGui::Combo("Show as", &type, types, IM_ARRAYSIZE(types))) {
+      if (saveBindingType(editing, type)) {
+        editing.typeOverride = type;
+        refreshRequested.store(true);
+        message = "Binding type saved.";
+      } else {
+        message = "Could not save the binding type in ModActivator.ini.";
+      }
+    }
+
     ImGui::SetNextItemWidth(260 * UI::scale);
     if (ImGui::InputText("New shortcut", entry, sizeof entry))
       acknowledge = false;

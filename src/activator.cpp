@@ -32,6 +32,9 @@ struct Action {
   std::vector<int> cachedKeys;
   int severity = 0;
   std::string overlapNames;
+  int typeOverride = 0;
+  int menuRank = 0;
+  int featureRank = 0;
 };
 static std::string read(const Action &a) {
   ++configReads;

@@ -69,9 +69,9 @@ static std::string name(const Action &a) {
   return out;
 }
 static std::string actionName(const Action &a) {
-  if (uiRank(a.section, a.key))
+  if (a.menuRank)
     return "Menu shortcut";
-  if (toggleRank(a.section, a.key))
+  if (a.featureRank)
     return "Feature toggle";
   std::string raw = a.key;
   for (const char *suffix : {"Hotkey", "KeyVK", "Key"}) {

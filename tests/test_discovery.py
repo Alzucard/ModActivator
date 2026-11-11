@@ -24,3 +24,27 @@ assert scan(root,'NewUI.asi')==''
 fn=m.ModActivatorToggleDiscoveryTest;fn.argtypes=[ctypes.c_char_p,ctypes.c_char_p,ctypes.c_char_p,ctypes.c_int]
 r=scan(root,'ToggleOnly.asi;Nested.asi');assert len(r.strip().splitlines())==1 and '|HotkeyToggleEffect|121,' in r
 print('PASS: UI discovery, one UI per mod, no fallback, unloaded filtering, nested configs, modifiers, late mods and toggle discovery.')
+
+# A field called ToggleKey can open a UI. A comment attached to a different
+# setting must not affect its classification.
+(root/'WikiFixture.ini').write_text('[Wiki]\n; Keyboard key to open/close the wiki\nToggleKey=F7\n')
+(root/'Opaque.ini').write_text('[Input]\n; Show the menu at startup\nStartupHint=1\nToggleKey=F6\n')
+(root/'ModActivator.ini').write_text('')
+toggle_scan = fn
+fn = m.ModActivatorDiscoveryTest
+assert 'WikiFixture.asi|WikiFixture.ini|Wiki|ToggleKey|118,' in scan(root,'WikiFixture.asi')
+assert scan(root,'Opaque.asi') == ''
+fn = toggle_scan
+assert 'Opaque.asi|Opaque.ini|Input|ToggleKey|117,' in scan(root,'Opaque.asi')
+assert scan(root,'WikiFixture.asi') == ''
+(root/'ModActivator.ini').write_text('[BindingTypes]\nopaque.ini|input|togglekey=1\nwikifixture.ini|wiki|togglekey=2\n')
+assert 'WikiFixture.asi' in scan(root,'WikiFixture.asi')
+assert scan(root,'Opaque.asi') == ''
+fn = m.ModActivatorDiscoveryTest
+assert 'Opaque.asi' in scan(root,'Opaque.asi')
+assert scan(root,'WikiFixture.asi') == ''
+(root/'ModActivator.ini').write_text('[BindingTypes]\nopaque.ini|input|togglekey=3\n')
+assert scan(root,'Opaque.asi') == ''
+fn = toggle_scan
+assert scan(root,'Opaque.asi') == ''
+print('PASS: nearby comments, ambiguous names, and persisted binding-type overrides.')

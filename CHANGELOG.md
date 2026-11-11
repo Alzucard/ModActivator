@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.3
+- Recognize menu shortcuts described in INI comments, including CDWiki.
+- Set a detected binding to Menu, Toggle, or Hotkeys only from the Hotkeys tab.
+
 ## 1.1.2
 - Scroll mod lists with the mouse wheel while hovering over an entry.
 - Use shorter mod cards and single-line Hotkeys rows.

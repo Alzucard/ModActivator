@@ -1,4 +1,4 @@
-# ModActivator 1.1.2
+# ModActivator 1.1.3
 
 An in-game mod menu and hotkey manager for Crimson Desert.
 
@@ -21,6 +21,10 @@ Close Crimson Desert. Copy `ModActivator.asi` and `ModActivator.ini` into the ga
 Launch the game and press **Ctrl+Shift+Backspace**. Keep your existing INI when updating.
 
 If the overlay is invisible with frame generation, close the game and try `WrapSwapChain=1` in `ModActivator.ini`.
+
+## Binding types
+
+ModActivator uses shortcut names and nearby INI comments to identify menu openers and feature toggles. To correct a guess, select the binding in Hotkeys and set **Show as** to **Menu**, **Toggle**, or **Hotkeys only**. **Automatic** clears the override. These choices are saved in ModActivator.ini and apply immediately. The binding must first be detectable by the existing keyboard shortcut scan.
 
 ## Hotkey edits
 
