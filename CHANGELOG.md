@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.2.2.4
+## 1.2.3
 - Group bindings by mod in Hotkeys and Mod placement, with collapsible headings.
 - Show INI descriptions in a What it does column and retain complete comment blocks in tooltips.
 
