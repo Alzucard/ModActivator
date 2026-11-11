@@ -569,19 +569,17 @@ void Render() {
             continue;
           }
           ImGui::Spacing();
-          ImGui::TextDisabled(
-              tab == 0 ? "Open a mod's settings with its configured shortcut."
-              : tab == 1 ? "Toggle features without leaving this panel."
-                         : "Manage this tab from Settings.");
+          ImGui::TextDisabled("Drag the handle on a mod to reorder it.");
           ImGui::Spacing();
           ImGui::BeginChild("ModList", ImVec2(0, -34 * u), false);
           int count = 0;
-          for (size_t i = 0; i < actions.size(); ++i) {
-            auto &a = actions[i];
+          PlacementDrop drop;
+          static bool reorderFailed = false;
+          for (const auto &a : actions) {
             if (actionTab(a) != tab || !UI::matches(a))
               continue;
             ++count;
-            ImGui::PushID((int)i);
+            ImGui::PushID(identity(a).c_str());
             HMODULE module = previewMode ? GetModuleHandleA("kernel32.dll")
                                          : GetModuleHandleA(a.module.c_str());
             bool managed = !a.toggle && module &&
@@ -595,13 +593,20 @@ void Render() {
             ImGui::BeginChild("Card", ImVec2(0, 55 * u), true,
                               ImGuiWindowFlags_NoScrollbar |
                                   ImGuiWindowFlags_NoScrollWithMouse);
-            float top = ImGui::GetCursorPosY();
+            const float top = ImGui::GetCursorPosY();
+            const float handleX = ImGui::GetCursorPosX();
+            ImGui::SetCursorPosY(top + 5 * u);
+            dragHandle(a, 31 * u);
+            const bool overHandle = ImGui::IsItemHovered();
+            const float labelX = handleX + 41 * u;
+            ImGui::SetCursorPos(ImVec2(labelX, top));
             const float buttonX = ImGui::GetWindowContentRegionMax().x - 110 * u;
             const float textWidth = buttonX - ImGui::GetCursorPosX() - 8 * u;
             ImGui::PushClipRect(ImGui::GetCursorScreenPos(),
                                 ImVec2(ImGui::GetCursorScreenPos().x + textWidth,
                                        ImGui::GetWindowPos().y + 55 * u), true);
             ImGui::TextUnformatted(UI::name(a).c_str());
+            ImGui::SetCursorPosX(labelX);
             std::string detail = UI::shortcut(a);
             if (restart)
               detail += "  |  Restart required";
@@ -619,10 +624,12 @@ void Render() {
                 open = false;
             }
             ImGui::EndDisabled();
-            if (ImGui::IsWindowHovered() && !ImGui::IsItemHovered())
+            if (!overHandle && !ImGui::GetDragDropPayload() &&
+                ImGui::IsWindowHovered() && !ImGui::IsItemHovered())
               ImGui::SetTooltip("%s\n%s\n[%s] %s", UI::name(a).c_str(),
                                 detail.c_str(), a.section.c_str(), a.key.c_str());
             ImGui::EndChild();
+            dropOnCard(a, drop);
             ImGui::PopStyleVar(2);
             ImGui::PopID();
           }
@@ -635,9 +642,11 @@ void Render() {
                                      "Refresh after your mods have loaded.");
           }
           ImGui::EndChild();
+          if (!drop.source.empty())
+            reorderFailed = !reorderActions(actions, drop);
           ImGui::Separator();
-          if (tab == 1)
-            ImGui::TextDisabled("Toggle status is unverified unless the mod reports it.");
+          if (reorderFailed)
+            ImGui::TextDisabled("Could not save mod order.");
           else
             ImGui::TextDisabled("%s to close", shortcutLabel(openerKeys()).c_str());
           ImGui::EndTabItem();
@@ -761,12 +770,12 @@ ModActivatorSettingsTest(const char *root) {
     Action first{"First", "First.asi", "First.ini", "Menu", "Hotkey"};
     Action second{"Second", "Second.asi", "Second.ini", "Menu", "Hotkey"};
     Action third{"Third", "Third.asi", "Third.ini", "Menu", "Hotkey"};
-    if (encodeBinding(first, "", {VK_CONTROL, VK_SHIFT, VK_F6}) != "Ctrl+Shift+F6" ||
+    if (encodeBinding(first, "Ctrl+Shift+F6") != "Ctrl+Shift+F6" ||
         encodeBinding(first, umlaut) != ";" ||
         replaceValue("[Menu]\nHotkey=; ; comment\n", first, "F8") !=
             "[Menu]\nHotkey=F8 ; comment\n")
       return 2;
-    if (encodeBinding(second, "", {VK_CONTROL, VK_F6}) != "0x75")
+    if (encodeBinding(second, "F6") != "0x75")
       return 3;
 
     ModLayout test;
@@ -787,8 +796,19 @@ ModActivatorSettingsTest(const char *root) {
     if (actions.front().module != second.module || actions.back().module != third.module)
       return 6;
 
-    if (!saveLayout({}))
+    auto moved = modLayout;
+    placementFor(moved, identity(third)).tab = togglesPlacement;
+    Action toggle{"Toggle", "Toggle.asi", "Toggle.ini", "Menu", "Hotkey", true};
+    placementFor(moved, identity(toggle)).tab = modMenusPlacement;
+    if (!saveLayout(std::move(moved)))
       return 7;
+    modLayout = {};
+    loadLayout();
+    if (actionTab(third) != 1 || third.toggle || actionTab(toggle) != 0 || !toggle.toggle)
+      return 9;
+
+    if (!saveLayout({}))
+      return 10;
     loadLayout();
     if (!modLayout.tabs.empty() || !modLayout.placements.empty())
       return 8;
@@ -1064,7 +1084,7 @@ extern "C" __declspec(dllexport) int ModActivatorScrollTest() {
 
   catalog.clear();
   for (int i = 0; i < 30; ++i) {
-    Action action{"Fixture", "Fixture.asi", "", "", ""};
+    Action action{"Fixture", "Fixture.asi", "", "", std::to_string(i)};
     action.cachedKeys = {119};
     catalog.push_back(action);
   }
@@ -1104,6 +1124,83 @@ extern "C" __declspec(dllexport) int ModActivatorScrollTest() {
   }
   catalog.clear();
   previewMode = false;
+  ImGui::DestroyContext(context);
+  return result;
+}
+
+extern "C" __declspec(dllexport) int ModActivatorDragTest(const char *root) {
+  if (!folder.empty() || !root)
+    return -1;
+  folder = root;
+  auto *context = ImGui::CreateContext();
+  auto &io = ImGui::GetIO();
+  io.DisplaySize = ImVec2(1000, 860);
+  io.DeltaTime = 1.0f / 60;
+  io.IniFilename = nullptr;
+  ml::gui::InitStyle(1.0f);
+  unsigned char *pixels;
+  int width, height;
+  io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+
+  for (auto name : {"Alpha", "Beta", "Gamma"}) {
+    Action a{name, std::string(name) + ".asi", std::string(name) + ".ini", "Menu", "Hotkey"};
+    a.cachedKeys = {VK_F8};
+    catalog.push_back(a);
+  }
+  previewMode = true;
+  previewTab = 0;
+  ml::State::Get().menuOpen = true;
+  const auto frame = [] {
+    ImGui::NewFrame();
+    ml::gui::Render();
+    ImGui::Render();
+  };
+  frame();
+  frame();
+  frame();
+  std::vector<ImGuiWindow *> cards;
+  for (auto *window : context->Windows)
+    if (window->Active && strstr(window->Name, "/Card_"))
+      cards.push_back(window);
+  std::sort(cards.begin(), cards.end(),
+            [](const auto *a, const auto *b) { return a->Pos.y < b->Pos.y; });
+
+  int result = 1;
+  if (cards.size() == 3) {
+    const auto source = cards.front()->Pos;
+    const auto target = cards.back()->Pos;
+    const float bottom = target.y + cards.back()->Size.y - 10;
+    io.AddMousePosEvent(source.x + 24, source.y + 25);
+    frame();
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    frame();
+    io.AddMousePosEvent(target.x + 80, bottom);
+    frame();
+    frame();
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    frame();
+    frame();
+
+    modLayout = {};
+    loadLayout();
+    auto ordered = catalog;
+    orderActions(ordered);
+    result = ordered[0].label == "Beta" && ordered[1].label == "Gamma" &&
+             ordered[2].label == "Alpha" ? 0 : 2;
+    if (!result) {
+      const auto alpha = identity(ordered[2]), beta = identity(ordered[0]);
+      if (!reorderActions(ordered, {alpha, beta, false}))
+        result = 3;
+      orderActions(ordered);
+      if (ordered[0].label != "Alpha")
+        result = 4;
+    }
+  }
+  catalog.clear();
+  modLayout = {};
+  folder.clear();
+  previewMode = false;
+  ml::State::Get().menuOpen = false;
   ImGui::DestroyContext(context);
   return result;
 }

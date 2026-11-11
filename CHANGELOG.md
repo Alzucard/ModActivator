@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.2
+- Drag mod cards to reorder them within their current tab.
+- Move mod cards to either built-in mod tab or to any custom tab from Settings.
+- Manage binding types in Settings and edit hotkeys through a single text field.
+
 ## 1.2.1
 - Wait until the first menu open to allocate DirectX overlay resources and acquire swapchain buffers.
 - Read the optional EnableDred setting for GPU crash diagnostics.

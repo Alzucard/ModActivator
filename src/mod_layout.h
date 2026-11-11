@@ -10,6 +10,9 @@ struct ModLayout {
 };
 static ModLayout modLayout;
 static constexpr int firstCustomTab = 3;
+// Zero means automatic in existing configs. Use distinct IDs for overrides.
+static constexpr int modMenusPlacement = -1;
+static constexpr int togglesPlacement = -2;
 
 static std::string hexText(const std::string &value) {
   std::string result;
@@ -87,12 +90,18 @@ static bool saveLayout(ModLayout next) {
 }
 static int assignedTab(const std::string &binding) {
   for (const auto &place : modLayout.placements)
-    if (place.binding == binding && modLayout.tabs.count(place.tab))
+    if (place.binding == binding &&
+        (place.tab == modMenusPlacement || place.tab == togglesPlacement ||
+         modLayout.tabs.count(place.tab)))
       return place.tab;
   return 0;
 }
 static int actionTab(const Action &action) {
   const int assigned = assignedTab(identity(action));
+  if (assigned == modMenusPlacement)
+    return 0;
+  if (assigned == togglesPlacement)
+    return 1;
   return assigned ? assigned : action.toggle ? 1 : 0;
 }
 static void orderActions(std::vector<Action> &actions) {
@@ -115,6 +124,81 @@ static ModPlacement &placementFor(ModLayout &layout, const std::string &id) {
       return place;
   return layout.placements.emplace_back(ModPlacement{id, 0});
 }
+struct PlacementDrop {
+  std::string source, target;
+  bool after = false;
+};
+static bool reorderActions(const std::vector<Action> &actions, const PlacementDrop &drop) {
+  const auto findAction = [&](const std::string &id) {
+    return std::find_if(actions.begin(), actions.end(),
+                        [&](const Action &a) { return identity(a) == id; });
+  };
+  const auto sourceAction = findAction(drop.source);
+  const auto targetAction = findAction(drop.target);
+  if (sourceAction == actions.end() || targetAction == actions.end() ||
+      sourceAction == targetAction || actionTab(*sourceAction) != actionTab(*targetAction))
+    return true;
+  auto next = modLayout;
+  for (const auto &a : actions)
+    placementFor(next, identity(a));
+  const auto findPlacement = [&](const std::string &id) {
+    return std::find_if(next.placements.begin(), next.placements.end(),
+                        [&](const ModPlacement &place) { return place.binding == id; });
+  };
+  const auto source = findPlacement(drop.source);
+  const auto target = findPlacement(drop.target) + (drop.after ? 1 : 0);
+  if (target == source || target == source + 1)
+    return true;
+  if (source < target)
+    std::rotate(source, source + 1, target);
+  else
+    std::rotate(target, source, source + 1);
+  return saveLayout(std::move(next));
+}
+
+static constexpr char placementPayload[] = "ModActivatorPlacement";
+static void dragHandle(const Action &action, float size) {
+  ImGui::Button("##Drag", ImVec2(size, size));
+  const auto min = ImGui::GetItemRectMin();
+  const auto max = ImGui::GetItemRectMax();
+  const ImVec2 center((min.x + max.x) * .5f, (min.y + max.y) * .5f);
+  auto *draw = ImGui::GetWindowDrawList();
+  const auto color = ImGui::GetColorU32(ImGuiCol_TextDisabled);
+  for (int y = -1; y <= 1; ++y)
+    for (int x : {-1, 1})
+      draw->AddCircleFilled(ImVec2(center.x + x * size * .085f,
+                                  center.y + y * size * .16f), size * .045f, color);
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("Drag to reorder");
+  if (ImGui::BeginDragDropSource()) {
+    const auto binding = identity(action);
+    ImGui::SetDragDropPayload(placementPayload, binding.data(), binding.size());
+    ImGui::TextUnformatted(UI::name(action).c_str());
+    ImGui::EndDragDropSource();
+  }
+}
+static void dropOnCard(const Action &action, PlacementDrop &drop) {
+  if (!ImGui::BeginDragDropTarget())
+    return;
+  const auto min = ImGui::GetItemRectMin();
+  const auto max = ImGui::GetItemRectMax();
+  const bool after = ImGui::GetMousePos().y >= (min.y + max.y) * .5f;
+  if (const auto *payload = ImGui::AcceptDragDropPayload(
+          placementPayload, ImGuiDragDropFlags_AcceptBeforeDelivery |
+                            ImGuiDragDropFlags_AcceptNoDrawDefaultRect)) {
+    const std::string source(static_cast<const char *>(payload->Data), payload->DataSize);
+    const auto target = identity(action);
+    if (source != target) {
+      const float y = after ? max.y : min.y;
+      ImGui::GetWindowDrawList()->AddLine(ImVec2(min.x, y), ImVec2(max.x, y),
+                                         ImGui::GetColorU32(UI::gold), 2.0f);
+      if (payload->IsDelivery())
+        drop = {source, target, after};
+    }
+  }
+  ImGui::EndDragDropTarget();
+}
+
 static bool saveOpener(const std::vector<int> &keys) {
   const auto code = shortcutCode(keys);
   if (!code || (code & 0xff) == VK_ESCAPE)
@@ -244,65 +328,86 @@ static void drawSettings(const std::vector<Action> &actions) {
     ImGui::TextWrapped("%s", status.c_str());
 
   ImGui::Separator();
-  ImGui::TextUnformatted("Mod placement");
-  std::map<int, std::vector<size_t>> rows;
-  for (size_t i = 0; i < actions.size(); ++i)
-    rows[actionTab(actions[i])].push_back(i);
-  if (ImGui::BeginTable("Placement", 3, ImGuiTableFlags_RowBg)) {
-    ImGui::TableSetupColumn("Mod");
-    ImGui::TableSetupColumn("Tab");
-    ImGui::TableSetupColumn("Order", ImGuiTableColumnFlags_WidthFixed, 110 * UI::scale);
-    ImGui::TableHeadersRow();
-    for (const auto &[tab, indices] : rows) {
-      for (size_t row = 0; row < indices.size(); ++row) {
-        const auto &action = actions[indices[row]];
-        const auto binding = identity(action);
-        ImGui::PushID(binding.c_str());
+  if (ImGui::CollapsingHeader("Binding type")) {
+    std::vector<Action> bindings;
+    {
+      std::lock_guard<std::mutex> lock(catalogMutex);
+      bindings = allBindings;
+    }
+    if (ImGui::BeginTable("BindingTypes", 2, ImGuiTableFlags_RowBg)) {
+      ImGui::TableSetupColumn("Binding");
+      ImGui::TableSetupColumn("Show as");
+      ImGui::TableHeadersRow();
+      const char *types[] = {"Automatic", "Menu", "Toggle", "Hotkeys only"};
+      for (const auto &binding : bindings) {
+        if (!UI::matches(binding))
+          continue;
+        ImGui::PushID(identity(binding).c_str());
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
-        ImGui::TextUnformatted(UI::name(action).c_str());
-        if (ImGui::IsItemHovered())
-          ImGui::SetTooltip("%s", UI::actionName(action).c_str());
+        const auto label = UI::name(binding) + " / " + UI::actionName(binding);
+        ImGui::TextUnformatted(label.c_str());
         ImGui::TableSetColumnIndex(1);
-        const int current = assignedTab(binding);
-        const char *defaultName = action.toggle ? "Toggles" : "Mod menus";
+        int type = binding.typeOverride;
         ImGui::SetNextItemWidth(-FLT_MIN);
-        if (ImGui::BeginCombo("##Destination", current ? modLayout.tabs.at(current).c_str()
-                                                        : defaultName)) {
-          int destination = current;
-          if (ImGui::Selectable(defaultName, current == 0))
-            destination = 0;
-          for (const auto &[id, name] : modLayout.tabs)
-            if (ImGui::Selectable(name.c_str(), current == id))
-              destination = id;
-          ImGui::EndCombo();
-          if (destination != current) {
-            auto next = modLayout;
-            placementFor(next, binding).tab = destination;
-            status = saveLayout(std::move(next)) ? "Placement saved."
-                                                  : "Could not save placement.";
+        if (ImGui::Combo("##BindingType", &type, types, IM_ARRAYSIZE(types))) {
+          if (saveBindingType(binding, type)) {
+            refreshRequested.store(true);
+            status = "Binding type saved.";
+          } else {
+            status = "Could not save the binding type.";
           }
-        }
-        ImGui::TableSetColumnIndex(2);
-        ImGui::BeginDisabled(row == 0);
-        const bool up = ImGui::SmallButton("Up");
-        ImGui::EndDisabled();
-        ImGui::SameLine();
-        ImGui::BeginDisabled(row + 1 == indices.size());
-        const bool down = ImGui::SmallButton("Down");
-        ImGui::EndDisabled();
-        if (up || down) {
-          auto next = modLayout;
-          for (const auto &a : actions)
-            placementFor(next, identity(a));
-          const auto other = identity(actions[indices[up ? row - 1 : row + 1]]);
-          auto &first = placementFor(next, binding);
-          auto &second = placementFor(next, other);
-          std::swap(first, second);
-          status = saveLayout(std::move(next)) ? "Order saved." : "Could not save order.";
         }
         ImGui::PopID();
       }
+      ImGui::EndTable();
+    }
+  }
+
+  ImGui::Separator();
+  ImGui::TextUnformatted("Mod placement");
+  if (ImGui::BeginTable("Placement", 2, ImGuiTableFlags_RowBg)) {
+    ImGui::TableSetupColumn("Mod");
+    ImGui::TableSetupColumn("Tab");
+    ImGui::TableHeadersRow();
+    for (const auto &action : actions) {
+      if (!UI::matches(action))
+        continue;
+      const auto binding = identity(action);
+      ImGui::PushID(binding.c_str());
+      ImGui::TableNextRow();
+      ImGui::TableSetColumnIndex(0);
+      ImGui::TextUnformatted(UI::name(action).c_str());
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", UI::actionName(action).c_str());
+      ImGui::TableSetColumnIndex(1);
+      const int current = assignedTab(binding);
+      const std::string automatic = action.toggle ? "Automatic (Toggles)"
+                                                  : "Automatic (Mod menus)";
+      const auto label = current == modMenusPlacement ? "Mod menus"
+                       : current == togglesPlacement ? "Toggles"
+                       : current ? modLayout.tabs.at(current) : automatic;
+      ImGui::SetNextItemWidth(-FLT_MIN);
+      if (ImGui::BeginCombo("##Destination", label.c_str())) {
+        int destination = current;
+        if (ImGui::Selectable(automatic.c_str(), current == 0))
+          destination = 0;
+        if (ImGui::Selectable("Mod menus", current == modMenusPlacement))
+          destination = modMenusPlacement;
+        if (ImGui::Selectable("Toggles", current == togglesPlacement))
+          destination = togglesPlacement;
+        for (const auto &[id, name] : modLayout.tabs)
+          if (ImGui::Selectable((name + "###Destination" + std::to_string(id)).c_str(), current == id))
+            destination = id;
+        ImGui::EndCombo();
+        if (destination != current) {
+          auto next = modLayout;
+          placementFor(next, binding).tab = destination;
+          status = saveLayout(std::move(next)) ? "Placement saved."
+                                                : "Could not save placement.";
+        }
+      }
+      ImGui::PopID();
     }
     ImGui::EndTable();
   }

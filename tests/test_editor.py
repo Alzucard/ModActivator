@@ -30,7 +30,7 @@ with TemporaryDirectory(dir=p) as tmp:
     settings.argtypes = [ctypes.c_char_p]
     result = settings((str(fixture) + '\\').encode())
     assert result == 0, f'Settings regression check failed at step {result}'
-print('PASS: recorded chords, numeric modifier retention, keyboard layout mapping, saved opener, tab assignment and order.')
+print('PASS: typed chords, numeric modifier retention, keyboard layout mapping, saved opener, built-in and custom tab placement.')
 
 commented = b'[Menu]\r\nHotkey=F8 ; note | kept verbatim\r\n'
 r, msg, out = edit('InlineNote.ini', commented, 'Menu', 'Hotkey', 'F7')

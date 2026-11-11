@@ -14,11 +14,10 @@ static std::string readBytes(const std::string &p) {
     throw std::runtime_error("Cannot read config.");
   return std::string(std::istreambuf_iterator<char>(f), {});
 }
-static std::string encodeBinding(const Action &a, std::string input,
-                                 std::vector<int> recorded = {}) {
+static std::string encodeBinding(const Action &a, std::string input) {
   input = trim(input);
-  if (recorded.empty() &&
-      (input.empty() || input.find_first_of("\r\n|") != input.npos || bindingComment(input) != input.npos))
+  if (input.empty() || input.find_first_of("\r\n|") != input.npos ||
+      bindingComment(input) != input.npos)
     throw std::runtime_error(
         "Enter one key or combination, such as F6 or Ctrl+F6.");
   if (lower(a.file) == "reshade.ini")
@@ -30,51 +29,28 @@ static std::string encodeBinding(const Action &a, std::string input,
   const auto base = trim(setting.substr(0, bar));
   const bool numeric = !base.empty() && isdigit((unsigned char)base[0]) &&
                        base.find(',') == base.npos && !standaloneDigit(a, base);
-  if (!recorded.empty()) {
-    // Preserve the modifier flags stored separately by some mods.
-    for (int modifier : keysFrom(a, ""))
-      if (modifier)
-        recorded.erase(std::remove(recorded.begin(), recorded.end() - 1, modifier),
-                       recorded.end() - 1);
-    if (numeric && recorded.size() != 1)
-      throw std::runtime_error("This mod stores a single key code and has separate modifier flags.");
-    if (numeric && recorded.size() == 1) {
-      input = std::to_string(recorded.back());
-    } else {
-      for (int key : recorded) {
-        const auto name = configKeyName(key);
-        if (name.empty())
-          throw std::runtime_error("This key cannot be written in this mod's shortcut format.");
-        if (!input.empty())
-          input += '+';
-        input += name;
-      }
-    }
-  }
-  if (recorded.empty()) {
-    input = compactShortcut(std::move(input));
-    auto separator = input.find_last_of('+');
-    if (input == "+")
-      separator = input.npos;
-    else if (input.size() >= 2 && input.compare(input.size() - 2, 2, "++") == 0)
-      --separator;
-    const size_t start = separator == input.npos ? 0 : separator + 1;
-    const auto token = trim(input.substr(start));
-    const auto symbol = keySymbol(token);
-    const bool numericLiteral = symbol >= L'0' && symbol <= L'9';
-    if (symbol && (!numeric || (!numericLiteral && separator == input.npos))) {
-      const auto layout = gameKeyboardLayout();
-      auto scan = scanForSymbol(symbol, layout);
-      if (!scan)
-        scan = scanForLocalizedSymbol(token, layout);
-      const auto canonical = usSymbolForScan(scan);
-      if (canonical) {
-        if (numeric) {
-          input = std::to_string(vkForScan(scan, layout));
-        } else {
-          input.replace(start, input.size() - start,
-                        scan == 0x29 ? "Grave" : std::string(1, canonical));
-        }
+  input = compactShortcut(std::move(input));
+  auto separator = input.find_last_of('+');
+  if (input == "+")
+    separator = input.npos;
+  else if (input.size() >= 2 && input.compare(input.size() - 2, 2, "++") == 0)
+    --separator;
+  const size_t start = separator == input.npos ? 0 : separator + 1;
+  const auto token = trim(input.substr(start));
+  const auto symbol = keySymbol(token);
+  const bool numericLiteral = symbol >= L'0' && symbol <= L'9';
+  if (symbol && (!numeric || (!numericLiteral && separator == input.npos))) {
+    const auto layout = gameKeyboardLayout();
+    auto scan = scanForSymbol(symbol, layout);
+    if (!scan)
+      scan = scanForLocalizedSymbol(token, layout);
+    const auto canonical = usSymbolForScan(scan);
+    if (canonical) {
+      if (numeric) {
+        input = std::to_string(vkForScan(scan, layout));
+      } else {
+        input.replace(start, input.size() - start,
+                      scan == 0x29 ? "Grave" : std::string(1, canonical));
       }
     }
   }
@@ -109,8 +85,6 @@ static std::string encodeBinding(const Action &a, std::string input,
     throw std::runtime_error("Unsupported shortcut.");
   if (!numeric && configKeyName(ks.back()).empty())
     throw std::runtime_error("Unsupported key name.");
-  if (!recorded.empty() && ks.back() != recorded.back())
-    throw std::runtime_error("This mod's shortcut format cannot represent the recorded key.");
   return converted;
 }
 static std::string replaceValue(const std::string &bytes, const Action &a,
@@ -214,7 +188,6 @@ static bool saveBinding(const Action &a, const std::string &expected,
 static void drawHotkeys() {
   static Action editing;
   static bool selected = false;
-  static std::vector<int> recorded;
   static char entry[128] = "";
   static std::string snapshot, message;
   static bool acknowledge = false;
@@ -278,8 +251,6 @@ static void drawHotkeys() {
           snapshot = std::move(selectedSnapshot);
           selected = true;
           entry[0] = 0;
-          recorded.clear();
-          UI::recording = 0;
           lastInput = "\x01";
           acknowledge = false;
           message.clear();
@@ -312,10 +283,6 @@ static void drawHotkeys() {
       lastLayout = layout;
       lastInput = "\x01";
       acknowledge = false;
-      if (!recorded.empty()) {
-        recorded.clear();
-        message = "Keyboard layout changed. Record the shortcut again.";
-      }
     }
     ImGui::Spacing();
     ImGui::Separator();
@@ -324,41 +291,15 @@ static void drawHotkeys() {
     ImGui::SameLine();
     ImGui::TextUnformatted(UI::name(editing).c_str());
     ImGui::TextDisabled("Current: %s", UI::shortcut(editing).c_str());
-    const char *types[] = {"Automatic", "Menu", "Toggle", "Hotkeys only"};
-    int type = editing.typeOverride;
-    ImGui::SetNextItemWidth(180 * UI::scale);
-    if (ImGui::Combo("Show as", &type, types, IM_ARRAYSIZE(types))) {
-      if (saveBindingType(editing, type)) {
-        editing.typeOverride = type;
-        refreshRequested.store(true);
-        message = "Binding type saved.";
-      } else {
-        message = "Could not save the binding type in ModActivator.ini.";
-      }
-    }
-
     ImGui::SetNextItemWidth(260 * UI::scale);
-    if (ImGui::InputText("New shortcut", entry, sizeof entry)) {
-      recorded.clear();
-      UI::recording = 0;
+    if (ImGui::InputTextWithHint("New shortcut", "Ctrl+F6", entry, sizeof entry))
       acknowledge = false;
-    }
-    if (auto keys = UI::recordShortcut("Record shortcut"); !keys.empty()) {
-      recorded = std::move(keys);
-      entry[0] = 0;
-      lastInput = "\x01";
-      acknowledge = false;
-    }
-    if (!recorded.empty())
-      ImGui::Text("Recorded: %s", shortcutLabel(recorded).c_str());
-    ImGui::TextWrapped("Hold Ctrl, Shift or Alt while pressing the main key. "
-                       "Some mods only support a single key.");
     try {
       if (lastInput != entry) {
         lastInput = entry;
         validationError.clear();
         try {
-          encodedCache = encodeBinding(editing, entry, recorded);
+          encodedCache = encodeBinding(editing, entry);
           proposedCache = keysFrom(editing, encodedCache);
         } catch (const std::exception &e) {
           validationError = e.what();
@@ -368,9 +309,7 @@ static void drawHotkeys() {
         throw std::runtime_error(validationError);
       const auto &encoded = encodedCache;
       const auto &proposed = proposedCache;
-      if (!recorded.empty() && proposed != recorded)
-        ImGui::TextWrapped("Saved shortcut with existing modifier settings: %s",
-                           shortcutLabel(proposed).c_str());
+      ImGui::TextDisabled("New binding: %s", shortcutLabel(proposed).c_str());
       const auto ownKeys = openerKeys();
       bool clashes = conflict(proposed, ownKeys) != 0;
       for (auto &a : list)
@@ -407,14 +346,12 @@ static void drawHotkeys() {
       }
       ImGui::EndDisabled();
     } catch (const std::exception &e) {
-      if (entry[0] || !recorded.empty())
+      if (entry[0])
         ImGui::TextWrapped("%s", e.what());
     }
     ImGui::SameLine();
     if (ImGui::Button("Cancel"))
       selected = false;
     ImGui::EndChild();
-    if (!selected)
-      UI::recording = 0;
   }
 }
