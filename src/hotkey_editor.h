@@ -242,32 +242,28 @@ static void drawHotkeys() {
             overlap ? UI::gold : UI::muted);
   ImGui::Spacing();
   ImGui::TextDisabled(
-      "Select a binding to edit. Changes apply after restarting the game.");
+      "Expand a mod and select a binding. Changes apply after restarting the game.");
   if (!message.empty())
     ImGui::TextWrapped("%s", message.c_str());
   float available = ImGui::GetContentRegionAvail().y;
   float listHeight =
       (std::max)(70.0f, available - (selected ? 300.0f * UI::scale : 0.0f));
-  if (ImGui::BeginTable("Bindings", 3,
+  if (ImGui::BeginTable("Bindings", 4,
                         ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg |
                             ImGuiTableFlags_BordersInnerH |
                             ImGuiTableFlags_Resizable,
                         ImVec2(0, listHeight))) {
-    ImGui::TableSetupColumn("MOD / ACTION", ImGuiTableColumnFlags_WidthStretch);
-    ImGui::TableSetupColumn("SHORTCUT", ImGuiTableColumnFlags_WidthFixed,
-                            160 * UI::scale);
-    ImGui::TableSetupColumn("STATUS", ImGuiTableColumnFlags_WidthFixed,
-                            118 * UI::scale);
+    ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthStretch, 1.25f);
+    ImGui::TableSetupColumn("Shortcut", ImGuiTableColumnFlags_WidthStretch, .8f);
+    ImGui::TableSetupColumn("What it does", ImGuiTableColumnFlags_WidthStretch, 1.8f);
+    ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, 90 * UI::scale);
     ImGui::TableSetupScrollFreeze(0, 1);
     ImGui::TableHeadersRow();
-    for (size_t i = 0; i < list.size(); ++i) {
-      auto &a = list[i];
-      if (!UI::matches(a))
-        continue;
+    UI::groupedBindings(list, [&](const Action &a) {
       ImGui::TableNextRow();
       ImGui::TableSetColumnIndex(0);
-      ImGui::PushID((int)i);
-      const std::string rowLabel = UI::name(a) + " / " + UI::actionName(a);
+      ImGui::PushID(identity(a).c_str());
+      const auto rowLabel = UI::actionName(a);
       if (ImGui::Selectable(rowLabel.c_str(),
                             selected && identity(a) == identity(editing),
                             ImGuiSelectableFlags_SpanAllColumns)) {
@@ -291,6 +287,8 @@ static void drawHotkeys() {
       ImGui::TableSetColumnIndex(1);
       ImGui::TextUnformatted(UI::shortcut(a).c_str());
       ImGui::TableSetColumnIndex(2);
+      UI::descriptionCell(a);
+      ImGui::TableSetColumnIndex(3);
       UI::badge(a.severity == 2   ? "Conflict"
                 : a.severity == 1 ? "Overlap"
                                   : "Clear",
@@ -300,7 +298,7 @@ static void drawHotkeys() {
       if (a.severity && ImGui::IsItemHovered())
         ImGui::SetTooltip("%s", a.overlapNames.c_str());
       ImGui::PopID();
-    }
+    }, 3);
     ImGui::EndTable();
   }
   if (selected) {
@@ -321,8 +319,11 @@ static void drawHotkeys() {
     ImGui::Spacing();
     ImGui::TextColored(UI::gold, "EDIT SHORTCUT");
     ImGui::SameLine();
-    ImGui::TextUnformatted(UI::name(editing).c_str());
+    const auto title = UI::name(editing) + " / " + UI::actionName(editing);
+    ImGui::TextUnformatted(title.c_str());
     ImGui::TextDisabled("Current: %s", UI::shortcut(editing).c_str());
+    if (!editing.description.empty())
+      UI::descriptionCell(editing);
     const float width = (std::min)(260 * UI::scale,
                                   ImGui::GetContentRegionAvail().x * .55f);
     if (auto keys = UI::shortcutField(recorded, width); !keys.empty()) {

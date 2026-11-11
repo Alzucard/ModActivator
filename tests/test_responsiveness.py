@@ -17,3 +17,7 @@ with TemporaryDirectory(dir='build') as tmp:
     result = drag((str(pathlib.Path(tmp).resolve()) + '\\').encode())
     assert result == 0, f'Drag-and-drop regression check failed at step {result}'
 print("PASS: mouse drag reorders cards, saves the result, and supports moving back up.")
+
+result = m.ModActivatorGroupsTest()
+assert result == 0, f'Grouped bindings regression check failed at step {result}'
+print("PASS: groups collapse by default, expand on search, and keep related bindings together.")

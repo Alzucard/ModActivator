@@ -806,15 +806,24 @@ ModActivatorSettingsTest(const char *root) {
                   "Controls", "StanceCycleKey"};
     Action wiki{"CD Wiki", "CDWiki.asi", "CDWiki.ini", "Input", "ToggleKey"};
     BindingComments notes;
-    notes[{"controls", "stancecyclekey"}] = "Switch between unarmed stances.";
-    notes[{"input", "togglekey"}] = "Open or close the wiki.";
+    const auto descriptionConfig = folder + "Descriptions.ini";
+    {
+      std::ofstream file(descriptionConfig);
+      file << "[Controls]\n; Switch between unarmed stances.\n"
+              "; Grave is the default key.\nStanceCycleKey=Grave\n"
+              "[Input]\nToggleKey=F8 ; Open or close the wiki.\n"
+              "AnotherKey=F7\n";
+    }
+    notes = readBindingComments(descriptionConfig);
+    if (notes.count({"input", "anotherkey"}))
+      return 18;
     for (int type : {0, 1, 2, 3}) {
       if (!saveBindingType(stance, type) || !saveBindingType(wiki, type))
         return 15;
       classifyBinding(stance, notes);
       classifyBinding(wiki, notes);
       if (UI::actionName(stance) != "Stance Cycle" || UI::actionName(wiki) != "Toggle" ||
-          stance.description != "Switch between unarmed stances." ||
+          stance.description != "Switch between unarmed stances.\nGrave is the default key." ||
           wiki.description != "Open or close the wiki." || stance.typeOverride != type ||
           wiki.typeOverride != type)
         return 16;
@@ -1247,6 +1256,62 @@ extern "C" __declspec(dllexport) int ModActivatorDragTest(const char *root) {
   folder.clear();
   previewMode = false;
   ml::State::Get().menuOpen = false;
+  ImGui::DestroyContext(context);
+  return result;
+}
+
+extern "C" __declspec(dllexport) int ModActivatorGroupsTest() {
+  if (!folder.empty())
+    return -1;
+  auto *context = ImGui::CreateContext();
+  auto &io = ImGui::GetIO();
+  io.DisplaySize = ImVec2(900, 600);
+  io.DeltaTime = 1.0f / 60;
+  io.IniFilename = nullptr;
+  unsigned char *pixels;
+  int width, height;
+  io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+  const std::string previousSearch = UI::search;
+
+  Action first{"Cycle", "CombatEvolved.asi", "CombatEvolved.ini", "Combat", "StanceCycleKey"};
+  first.description = "Switch unarmed stances.\nUse with fists drawn.";
+  Action second{"Mark", "COMBATEVOLVED.ASI", "CombatEvolved.ini", "Combat", "MarkKey"};
+  Action third{"Weather", "Weather.addon64", "Weather.ini", "Input", "ToggleKey"};
+  const std::vector<Action> bindings{first, second, third};
+  const auto frame = [&](const char *search, bool openCombat) {
+    strcpy(UI::search, search);
+    int drawn = 0;
+    ImGui::NewFrame();
+    ImGui::SetNextWindowSize(ImVec2(600, 430));
+    ImGui::Begin("Groups");
+    if (ImGui::BeginTable("Group fixtures", 2)) {
+      if (openCombat) {
+        ImGui::PushID("combatevolved.asi");
+        ImGui::GetStateStorage()->SetInt(ImGui::GetID("###ModGroup"), 1);
+        ImGui::PopID();
+      }
+      UI::groupedBindings(bindings, [&](const Action &binding) {
+        ++drawn;
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::TextUnformatted(UI::actionName(binding).c_str());
+        ImGui::TableSetColumnIndex(1);
+        UI::descriptionCell(binding);
+      });
+      ImGui::EndTable();
+    }
+    ImGui::End();
+    ImGui::Render();
+    return drawn;
+  };
+  int result = 0;
+  if (frame("", false) != 0 || frame("", false) != 0)
+    result = 1;
+  else if (frame("fists drawn", false) != 1 || frame("", false) != 0)
+    result = 2;
+  else if (frame("", true) != 2)
+    result = 3;
+  strcpy(UI::search, previousSearch.c_str());
   ImGui::DestroyContext(context);
   return result;
 }

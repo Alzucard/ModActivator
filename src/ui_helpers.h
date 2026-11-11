@@ -239,6 +239,72 @@ static void bindingTooltip(const Action &a, const std::string &detail = {}) {
   }
   ImGui::EndTooltip();
 }
+static void descriptionCell(const Action &action) {
+  if (action.description.empty()) {
+    ImGui::TextDisabled("No INI description");
+    return;
+  }
+  // Use the first line as the preview. The tooltip shows the full comment.
+  const auto &description = action.description;
+  auto end = (std::min)(description.size(), description.find('\n'));
+  const bool clipped = end > 128;
+  if (clipped) {
+    end = 128;
+    while (end && (static_cast<unsigned char>(description[end]) & 0xC0) == 0x80)
+      --end;
+  }
+  std::string preview = description.substr(0, end);
+  if (clipped || end < description.size())
+    preview += "...";
+  ImGui::PushTextWrapPos(0);
+  ImGui::TextUnformatted(preview.c_str());
+  ImGui::PopTextWrapPos();
+  if (ImGui::IsItemHovered())
+    bindingTooltip(action);
+}
+
+template <typename DrawRow>
+static void groupedBindings(const std::vector<Action> &actions, DrawRow drawRow,
+                            int statusColumn = -1) {
+  std::map<std::string, std::vector<const Action *>> groups;
+  for (const auto &action : actions)
+    if (matches(action))
+      groups[lower(action.module)].push_back(&action);
+  if (groups.empty()) {
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
+    ImGui::TextDisabled("No matching bindings");
+    return;
+  }
+
+  for (const auto &[module, bindings] : groups) {
+    ImGui::PushID(module.c_str());
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
+    const auto title = name(*bindings.front()) + " (" + std::to_string(bindings.size()) +
+                       (search[0] ? ")###SearchGroup" : ")###ModGroup");
+    auto flags = ImGuiTreeNodeFlags_CollapsingHeader | ImGuiTreeNodeFlags_SpanAllColumns;
+    if (search[0])
+      flags |= ImGuiTreeNodeFlags_DefaultOpen;
+    const bool open = ImGui::TreeNodeEx(title.c_str(), flags);
+    if (statusColumn >= 0) {
+      const auto severity = std::max_element(
+          bindings.begin(), bindings.end(),
+          [](const Action *a, const Action *b) { return a->severity < b->severity; });
+      if ((*severity)->severity) {
+        ImGui::TableSetColumnIndex(statusColumn);
+        const bool exact = (*severity)->severity == 2;
+        ImGui::TextColored(exact ? ImVec4(.95f, .43f, .40f, 1) : gold,
+                          "%s", exact ? "Conflict" : "Overlap");
+      }
+    }
+    if (open)
+      for (const auto *binding : bindings)
+        drawRow(*binding);
+    ImGui::PopID();
+  }
+}
+
 static void badge(const char *text, ImVec4 color) {
   ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(color.x * .20f, color.y * .20f,
                                                 color.z * .20f, 1));

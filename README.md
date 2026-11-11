@@ -1,4 +1,4 @@
-# ModActivator 1.2.2.3
+# ModActivator 1.2.2.4
 
 An in-game mod menu and hotkey manager for Crimson Desert.
 
@@ -10,7 +10,7 @@ The panel uses a charcoal-and-gold theme with larger text, searchable mod cards,
 
 - **Mod UIs:** one automatically detected menu shortcut per loaded mod.
 - **Toggles:** controls for toggle-only mods. The panel stays open when sending a toggle. State is labeled **Unreported** where a mod has no live-state interface.
-- **Hotkeys:** capture key combinations in a single field, with config backups. Exact conflicts are red; shared base keys with different modifiers are amber.
+- **Hotkeys:** expand a mod to see its shortcuts and INI descriptions. Capture new key combinations in a single field, with config backups. Exact conflicts are red; shared base keys with different modifiers are amber.
 - **Settings:** change the panel shortcut, manage tabs, choose each mod’s tab, and correct binding types.
 - **On-demand discovery:** scans when the panel opens, when you click **Refresh mods**, and after saving an edit. No periodic five-second scan.
 - Config reads and conflict calculations are cached outside normal menu rendering.
@@ -25,7 +25,7 @@ When ReShade supports the add-on API, ModActivator uses its presentation callbac
 
 ## Binding types
 
-ModActivator uses shortcut names and nearby INI comments to identify menu openers and feature toggles. To correct a guess, open **Settings → Mod placement** and set **Show as** to **Menu**, **Toggle**, or **Hotkeys only**. **Automatic** clears the override. These choices are saved in ModActivator.ini and apply immediately. The action label comes from the original INI key. Hover over a binding to see its exact key and any nearby INI comment. The binding must first be detectable by the existing keyboard shortcut scan.
+ModActivator uses shortcut names and nearby INI comments to identify menu openers and feature toggles. To correct a guess, open **Settings → Mod placement** and set **Show as** to **Menu**, **Toggle**, or **Hotkeys only**. **Automatic** clears the override. These choices are saved in ModActivator.ini and apply immediately. The action label comes from the original INI key. Hotkeys and Mod placement show an INI description preview when available. Hover over a binding to see its exact key and the full comment. The binding must first be detectable by the existing keyboard shortcut scan.
 
 ## Hotkey edits
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.2.4
+- Group bindings by mod in Hotkeys and Mod placement, with collapsible headings.
+- Show INI descriptions in a What it does column and retain complete comment blocks in tooltips.
+
 ## 1.2.2.3
 - Keep binding labels tied to their INI action names when changing Show as.
 - Show the original INI field and nearby comment in binding tooltips.

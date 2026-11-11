@@ -339,25 +339,26 @@ static void drawSettings(const std::vector<Action> &actions) {
       if (!visible.count(identity(binding)))
         bindings.push_back(binding);
   }
-  if (ImGui::BeginTable("Placement", 3, ImGuiTableFlags_RowBg |
+  if (ImGui::BeginTable("Placement", 4, ImGuiTableFlags_RowBg |
                                            ImGuiTableFlags_Resizable)) {
-    ImGui::TableSetupColumn("Mod / binding", ImGuiTableColumnFlags_WidthStretch, 1.5f);
+    ImGui::TableSetupColumn("Binding", ImGuiTableColumnFlags_WidthStretch, 1.1f);
+    ImGui::TableSetupColumn("What it does", ImGuiTableColumnFlags_WidthStretch, 1.5f);
     ImGui::TableSetupColumn("Tab");
     ImGui::TableSetupColumn("Show as");
     ImGui::TableHeadersRow();
     const char *types[] = {"Automatic", "Menu", "Toggle", "Hotkeys only"};
-    for (const auto &action : bindings) {
-      if (!UI::matches(action))
-        continue;
+    UI::groupedBindings(bindings, [&](const Action &action) {
       const auto binding = identity(action);
       ImGui::PushID(binding.c_str());
       ImGui::TableNextRow();
       ImGui::TableSetColumnIndex(0);
-      const auto name = UI::name(action) + " / " + UI::actionName(action);
+      const auto name = UI::actionName(action);
       ImGui::TextUnformatted(name.c_str());
       if (ImGui::IsItemHovered())
         UI::bindingTooltip(action);
       ImGui::TableSetColumnIndex(1);
+      UI::descriptionCell(action);
+      ImGui::TableSetColumnIndex(2);
       if (!visible.count(binding)) {
         ImGui::TextDisabled("No card");
       } else {
@@ -388,7 +389,7 @@ static void drawSettings(const std::vector<Action> &actions) {
           }
         }
       }
-      ImGui::TableSetColumnIndex(2);
+      ImGui::TableSetColumnIndex(3);
       int type = action.typeOverride;
       ImGui::SetNextItemWidth(-FLT_MIN);
       if (ImGui::Combo("##BindingType", &type, types, IM_ARRAYSIZE(types))) {
@@ -400,7 +401,7 @@ static void drawSettings(const std::vector<Action> &actions) {
         }
       }
       ImGui::PopID();
-    }
+    });
     ImGui::EndTable();
   }
   ImGui::EndChild();

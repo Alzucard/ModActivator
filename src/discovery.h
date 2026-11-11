@@ -105,7 +105,11 @@ static std::string trimConfigLine(const std::string &line) {
   return line.substr(start, line.find_last_not_of(" \t\r\n") - start + 1);
 }
 
-using BindingComments = std::map<std::pair<std::string, std::string>, std::string>;
+struct BindingComment {
+  std::string description;
+  std::string classificationHint;
+};
+using BindingComments = std::map<std::pair<std::string, std::string>, BindingComment>;
 
 static BindingComments readBindingComments(const std::filesystem::path &path) {
   std::ifstream file(path, std::ios::binary | std::ios::ate);
@@ -131,28 +135,41 @@ static BindingComments readBindingComments(const std::filesystem::path &path) {
 
   BindingComments comments;
   std::istringstream lines(content);
-  std::string line, section, previousComment;
+  std::string line, section, previousComment, description;
   while (std::getline(lines, line)) {
     line = trimConfigLine(line);
     if (line.empty()) {
       previousComment.clear();
+      description.clear();
     } else if (line[0] == ';' || line[0] == '#') {
-      previousComment = line.substr(1);
+      previousComment = trimConfigLine(line.substr(1));
+      if (!previousComment.empty()) {
+        if (!description.empty())
+          description += '\n';
+        description += previousComment;
+      }
     } else if (line[0] == '[') {
       const auto end = line.find(']');
       section = end == line.npos ? "" : lower(trimConfigLine(line.substr(1, end - 1)));
       previousComment.clear();
+      description.clear();
     } else {
       const auto equals = line.find('=');
       if (equals != line.npos && !section.empty()) {
         const auto inlineComment = bindingComment(line, equals + 1);
-        if (inlineComment != line.npos)
-          previousComment += " " + line.substr(inlineComment + 1);
-        if (!previousComment.empty())
-          comments[{section, lower(trimConfigLine(line.substr(0, equals)))}] =
-              previousComment;
+        const auto note = inlineComment == line.npos
+                              ? std::string{}
+                              : trimConfigLine(line.substr(inlineComment + 1));
+        if (!note.empty() || !description.empty()) {
+          auto &entry = comments[{section, lower(trimConfigLine(line.substr(0, equals)))}];
+          entry.description = note.empty() || description.empty()
+                                  ? note + description
+                                  : note + "\n" + description;
+          entry.classificationHint = previousComment + " " + note;
+        }
       }
       previousComment.clear();
+      description.clear();
     }
   }
   return comments;
@@ -160,7 +177,7 @@ static BindingComments readBindingComments(const std::filesystem::path &path) {
 
 static void classifyBinding(Action &action, const BindingComments &comments) {
   const auto comment = comments.find({lower(action.section), lower(action.key)});
-  action.description = comment == comments.end() ? "" : trimConfigLine(comment->second);
+  action.description = comment == comments.end() ? "" : comment->second.description;
   action.typeOverride = readBindingType(action);
   if (action.typeOverride >= 1 && action.typeOverride <= 3) {
     action.menuRank = action.typeOverride == 1 ? 200 : 0;
@@ -176,7 +193,8 @@ static void classifyBinding(Action &action, const BindingComments &comments) {
   static const std::regex opensInterface(
       R"(\b(?:open(?:s|/close)?|close[sd]?|show[s]?|hide[s]?|toggle[s]?)\s+(?:(?:the|a|an|mod|settings|in-game|in game)\s+)*(?:menu|gui|ui|window|panel|overlay|wiki|journal|interface)\b)",
       std::regex::icase | std::regex::optimize);
-  if (std::regex_search(action.description, opensInterface)) {
+  if (comment != comments.end() &&
+      std::regex_search(comment->second.classificationHint, opensInterface)) {
     action.menuRank = 120;
     action.featureRank = 0;
   }
