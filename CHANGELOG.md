@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.2.4
 - Fall back to the legacy DirectX path when ReShade is older than 6.8.0 or lacks the add-on event export, instead of never starting (#1).
 - Read the swap chain's colour space from ReShade, so the menu is composited correctly in HDR on the ReShade path (#2).
 - Draw the menu after ReShade's effects and overlay rather than under them (#3).
@@ -9,6 +9,24 @@
 - Add `UseReShadeEvents` and `DebugInput` to the shipped `ModActivator.ini`.
 - Name the previous release 1.2.3.1, matching the earlier hotfixes, so later versions sort above it (#6).
 - Add the HLSL sources of the precompiled ImGui and HDR composite shaders under `shaders/` (#7).
+- Skip and log folders and configs whose names fall outside the system code page instead of aborting discovery, and use the 8.3 short name when the install folder itself has such a name.
+- Read more key spellings, such as `Control`, `LCtrl`, `Del`, `VK_F5`, `Num5` and the numpad operators, and log a binding that is skipped because its value cannot be read.
+- Accept a binding that types a modifier that its section also requires with `RequireCtrl`, `RequireShift` or `RequireAlt`.
+- Build releases with assertions off, so a failed Dear ImGui check no longer closes the game.
+- Log MinHook and hook installation failures, and write the swapchain creation report when no frame arrives within a minute.
+- Recognise this plugin's own module by its real file name in hook diagnostics.
+- Rebuild the overlay's render targets on the next drawn frame after a resize, with every step checked, instead of inside the game's resize call; a failed rebuild is retried rather than drawn through.
+- Draw through the legacy present hook only on the game's own swapchain, not on other windows' swapchains.
+- Install the window procedure safely against messages arriving during the swap, and call the original through the matching Unicode API.
+- Replace a temporary file left by an interrupted hotkey save instead of refusing every later save.
+- Show non-Latin text: INI comments are read as UTF-16, UTF-8 or the system code page, names are converted for display, and missing characters are added to the font from a Windows font that has them.
+- Follow resolution changes with the UI scale instead of keeping the first one.
+- Copy the mod list and work out each card's state once per change rather than every frame.
+- Ship the plugin without its test entry points and without any exported symbols. The tests now load a separate `build/ModActivator-tests.asi`.
+- Read `HookXInput` from `ModActivator.ini`, as the log already told users to, and list it in the shipped INI.
+- Stop loading `xinput9_1_0.dll` into the game; nothing used it.
+- Remove code left over from the upstream overlay: the throwaway-device vtable reader, unused teardown and pad-chord functions, most of the detour helper, unused state and log declarations, and comments describing its loot features.
+- Start the discovery and editor tests from empty fixture folders.
 
 ## 1.2.3.1
 - Queue Windows input for the render thread to prevent a crash when typing or pressing hotkeys in the overlay.

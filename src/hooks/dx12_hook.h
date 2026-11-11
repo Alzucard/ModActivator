@@ -9,13 +9,8 @@ namespace ml::hooks
     // Uses ReShade callbacks when available, otherwise installs the DX12 hooks.
     // Must be called after MH_Initialize().
     bool InstallDX12Hooks(HMODULE self, bool useReShadeEvents);
-    void RemoveDX12Hooks();
 
-    // True once a frame has reached this mod and the menu renderer is up.
-    // Until then the menu cannot open, and the menu key is read nowhere else.
-    bool MenuHasFrame();
-
-    // Written when no frame has arrived in twenty seconds: who owns each way
+    // Written when no frame has arrived in a minute: who owns each way
     // the game's factory can make a swapchain, and whether this mod's
     // creation detour is still in line and has ever run.
     void LogSwapChainCreationPath();

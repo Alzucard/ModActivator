@@ -1,12 +1,12 @@
-import ctypes,pathlib
-root=pathlib.Path('build/discovery-tests').resolve();root.mkdir(exist_ok=True)
+import ctypes,pathlib,shutil
+root=pathlib.Path('build/discovery-tests').resolve();shutil.rmtree(root,ignore_errors=True);root.mkdir(parents=True)
 (root/'NewUI.ini').write_text('[General]\nActivationKeyVK=118\n[Menu]\nHotkey=Ctrl+7\nRequireAlt=1\n[Gameplay]\nStanceCycleKey=F3\nHotkeyToggleEffect=F10\n')
 (root/'ToggleOnly.ini').write_text('[General]\nHotkeyToggleEffect=F10\n[Hotkeys]\nToggleKey=121\nDisableKey=122\n')
 (root/'Ghost.ini').write_text('[Menu]\nHotkey=F6\n')
 (root/'MissingUI.ini').write_text('[Menu]\nEnabled=1\n')
 (root/'Disabled.ini').write_text('[Menu]\nHotkey=None\n')
 (root/'Nested').mkdir(exist_ok=True);(root/'Nested/startup.ini').write_text('[Startup]\nInstantResumeHotkey=Home\n[Menu]\nHotkey=F5\n')
-m=ctypes.WinDLL(str(pathlib.Path('dist/ModActivator.asi').resolve()));assert m.ModActivatorSelfTest()==0
+m=ctypes.WinDLL(str(pathlib.Path('build/ModActivator-tests.asi').resolve()));assert m.ModActivatorSelfTest()==0
 fn=m.ModActivatorDiscoveryTest;fn.argtypes=[ctypes.c_char_p,ctypes.c_char_p,ctypes.c_char_p,ctypes.c_int]
 def scan(path,mods):
  b=ctypes.create_string_buffer(100000);r=fn((str(path)+'\\').encode(),mods.encode(),b,len(b));assert r>=0,r;return b.value.decode()

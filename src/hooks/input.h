@@ -16,7 +16,6 @@ namespace ml::input
     // clamped to the window, and that is what ImGui is fed. The OS cursor is
     // left alone, so nothing has to be restored when the menu closes.
     void Init(HWND hwnd);
-    void Shutdown();
 
     void MenuOpened();   // centres the virtual cursor
     void MenuClosed();

@@ -1,4 +1,4 @@
-# ModActivator 1.2.3.1
+# ModActivator 1.2.4
 
 An in-game mod menu and hotkey manager for Crimson Desert.
 
@@ -9,10 +9,10 @@ An in-game mod menu and hotkey manager for Crimson Desert.
 The panel uses a charcoal-and-gold theme with larger text, searchable mod cards, readable shortcut labels, and a scrollable hotkey table with conflict badges.
 
 - **Mod UIs:** one automatically detected menu shortcut per loaded mod.
-- **Toggles:** controls for toggle-only mods. The panel stays open when sending a toggle. State is labeled **Unreported** where a mod has no live-state interface.
+- **Toggles:** controls for toggle-only mods. The panel stays open when sending a toggle. State is labeled **State unavailable** where a mod has no live-state interface.
 - **Hotkeys:** expand a mod to see its shortcuts and INI descriptions. Capture new key combinations in a single field, with config backups. Exact conflicts are red; shared base keys with different modifiers are amber.
 - **Settings:** change the panel shortcut, manage tabs, choose each mod’s tab, and correct binding types.
-- **On-demand discovery:** scans when the panel opens, when you click **Refresh mods**, and after saving an edit. No periodic five-second scan.
+- **On-demand discovery:** scans when the panel opens, when you click **Refresh**, and after saving an edit. No periodic five-second scan.
 - Config reads and conflict calculations are cached outside normal menu rendering.
 
 ## Install
@@ -21,7 +21,7 @@ Close Crimson Desert. Copy `ModActivator.asi` and `ModActivator.ini` into the ga
 
 Launch the game and press **Ctrl+Shift+Backspace**. Keep your existing INI when updating.
 
-With ReShade 6.8.0 or newer, ModActivator draws through ReShade's add-on callbacks, after ReShade's effects and overlay. With an older ReShade it falls back to the legacy DirectX path automatically. Set `UseReShadeEvents=0` under `[General]` to always use the legacy path. On the legacy path, try `WrapSwapChain=1` if the overlay is invisible with frame generation.
+With ReShade 6.8.0 or newer, ModActivator draws through ReShade's add-on callbacks, after ReShade's effects and overlay. With an older ReShade it falls back to the legacy DirectX path automatically. Set `UseReShadeEvents=0` under `[General]` to always use the legacy path. On the legacy path, try `WrapSwapChain=1` if the overlay is invisible with frame generation. Set `HookXInput=0` if the controller should keep reaching the game while the menu is open.
 
 `ModActivator.log` is started fresh each launch, and the previous one is kept as `ModActivator.log.old`. Set `DebugInput=1` to add cursor and raw input diagnostics each time the menu opens.
 
@@ -43,7 +43,7 @@ Use **Record opener** and **Save opener** to change ModActivator’s shortcut im
 
 ## Discovery and compatibility
 
-Discovery matches loaded ASI/addon64 modules to INI filenames or matching parent folders, up to two subfolder levels deep. ReShade's INI is associated with loaded `dxgi.dll`. Missing, disabled, hardcoded, non-INI, or unrecognized bindings may be omitted. There is no fixed mod list or guessed shortcut fallback.
+Discovery matches loaded ASI/addon64 modules to INI filenames or matching parent folders, up to two subfolder levels deep. ReShade's INI is listed only while ReShade is loaded, whatever its DLL is called; it is recognised by its add-on export. Missing, disabled, hardcoded, non-INI, or unrecognized bindings may be omitted. There is no fixed mod list or guessed shortcut fallback.
 
 Mods whose menus are controlled by ModHub are marked accordingly and must be opened through ModHub. The plugin sends shortcuts; it does not load or unload other ASIs. A dispatched shortcut is not proof that the destination mod acted on it. Toggle states cannot be universally inferred.
 
@@ -58,9 +58,10 @@ python scripts/build.py --toolchain C:\Tools\llvm-mingw-20261104-ucrt-x86_64
 python tests/test_discovery.py
 python tests/test_editor.py
 python tests/test_responsiveness.py
+python tests/test_text.py
 ```
 
-Run from the repository root. Build output is in `dist/`. Close the game before replacing an installed ASI; do not hot-unload it.
+Run from the repository root. The plugin is built to `dist/`. The tests load `build/ModActivator-tests.asi`, the same plugin with the test entry points compiled in; the shipped `dist/ModActivator.asi` contains none of them. Close the game before replacing an installed ASI; do not hot-unload it.
 
 Automated checks cover parsing, discovery, config editing and preservation, backups, conflict classification, and headless menu-rendering behavior. They do not establish in-game compatibility or verify another mod's response to injected input.
 

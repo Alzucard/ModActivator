@@ -9,6 +9,9 @@ struct ModLayout {
   std::vector<ModPlacement> placements;
 };
 static ModLayout modLayout;
+// Bumped whenever modLayout changes, so the menu re-sorts its cards then and
+// not every frame.
+static std::atomic<unsigned> layoutVersion{1};
 static constexpr int firstCustomTab = 3;
 // Zero means automatic in existing configs. Use distinct IDs for overrides.
 static constexpr int modMenusPlacement = -1;
@@ -71,6 +74,7 @@ static void loadLayout() {
   for (auto &[index, place] : ordered)
     loaded.placements.push_back(std::move(place));
   modLayout = std::move(loaded);
+  ++layoutVersion;
 }
 static bool saveLayout(ModLayout next) {
   std::string section;
@@ -86,6 +90,7 @@ static bool saveLayout(ModLayout next) {
                                    (folder + "ModActivator.ini").c_str()))
     return false;
   modLayout = std::move(next);
+  ++layoutVersion;
   return true;
 }
 static int assignedTab(const std::string &binding) {
@@ -97,7 +102,7 @@ static int assignedTab(const std::string &binding) {
   return 0;
 }
 static int actionTab(const Action &action) {
-  const int assigned = assignedTab(identity(action));
+  const int assigned = assignedTab(cachedIdentity(action));
   if (assigned == modMenusPlacement)
     return 0;
   if (assigned == togglesPlacement)
@@ -111,7 +116,7 @@ static void orderActions(std::vector<Action> &actions) {
   for (size_t i = 0; i < modLayout.placements.size(); ++i)
     rank.emplace(modLayout.placements[i].binding, i);
   const auto position = [&](const Action &action) {
-    const auto it = rank.find(identity(action));
+    const auto it = rank.find(cachedIdentity(action));
     return it == rank.end() ? rank.size() : it->second;
   };
   std::stable_sort(actions.begin(), actions.end(), [&](const Action &a, const Action &b) {
@@ -218,7 +223,8 @@ static bool saveOpener(const std::vector<int> &keys) {
   refreshRequested.store(true);
   return true;
 }
-static void drawSettings(const std::vector<Action> &actions) {
+// cardsStamp changes whenever the menu rebuilds `actions`.
+static void drawSettings(const std::vector<Action> &actions, unsigned cardsStamp) {
   static char tabName[64]{};
   static int editingTab = 0;
   static std::string status;
@@ -240,15 +246,12 @@ static void drawSettings(const std::vector<Action> &actions) {
   if (!proposed.empty()) {
     ImGui::Text("New shortcut: %s", shortcutLabel(proposed).c_str());
     bool clashes = false;
-    {
-      std::lock_guard<std::mutex> lock(catalogMutex);
-      for (const auto &a : allBindings)
-        if (conflict(proposed, a.cachedKeys)) {
-          clashes = true;
-          ImGui::TextWrapped("Overlaps %s / %s", UI::name(a).c_str(),
-                             UI::actionName(a).c_str());
-        }
-    }
+    for (const auto &a : bindingsSnapshot())
+      if (conflict(proposed, a.cachedKeys)) {
+        clashes = true;
+        ImGui::TextWrapped("Overlaps %s / %s", UI::name(a).c_str(),
+                           UI::actionName(a).c_str());
+      }
     if (clashes)
       ImGui::Checkbox("Save opener despite overlap", &acknowledge);
     ImGui::BeginDisabled(clashes && !acknowledge);
@@ -329,14 +332,23 @@ static void drawSettings(const std::vector<Action> &actions) {
 
   ImGui::Separator();
   ImGui::TextUnformatted("Mod placement");
-  std::vector<Action> bindings = actions;
-  std::set<std::string> visible;
-  for (const auto &action : actions)
-    visible.insert(identity(action));
-  {
-    std::lock_guard<std::mutex> lock(catalogMutex);
-    for (const auto &binding : allBindings)
-      if (!visible.count(identity(binding)))
+  // The cards, then every other binding, rebuilt only when either the
+  // catalog or the card order changes.
+  // Keyed on the copies themselves, not the shared counter, so a refresh
+  // landing between the two copies is picked up on the next frame.
+  static std::vector<Action> bindings;
+  static std::set<std::string> visible;
+  static unsigned builtCards = 0, builtBindings = 0;
+  const auto &all = bindingsSnapshot();
+  if (builtCards != cardsStamp || builtBindings != bindingsSnapshotVersion) {
+    builtCards = cardsStamp;
+    builtBindings = bindingsSnapshotVersion;
+    bindings = actions;
+    visible.clear();
+    for (const auto &action : actions)
+      visible.insert(cachedIdentity(action));
+    for (const auto &binding : all)
+      if (!visible.count(cachedIdentity(binding)))
         bindings.push_back(binding);
   }
   if (ImGui::BeginTable("Placement", 4, ImGuiTableFlags_RowBg |
@@ -348,7 +360,7 @@ static void drawSettings(const std::vector<Action> &actions) {
     ImGui::TableHeadersRow();
     const char *types[] = {"Automatic", "Menu", "Toggle", "Hotkeys only"};
     UI::groupedBindings(bindings, [&](const Action &action) {
-      const auto binding = identity(action);
+      const auto &binding = cachedIdentity(action);
       ImGui::PushID(binding.c_str());
       ImGui::TableNextRow();
       ImGui::TableSetColumnIndex(0);

@@ -9,6 +9,7 @@
 #include <psapi.h>
 #include <algorithm>
 #include <atomic>
+#include <string>
 #include <vector>
 
 #include <MinHook.h>
@@ -21,11 +22,10 @@
 #include "xinput_hook.h"
 #include "hdr_composite_shader.h"
 #include "../core/log.h"
-#include "../core/mod.h"
 #include "../core/settings.h"
 #include "../core/state.h"
 #include "../gui/menu.h"
-#include "../loot/farhook.h"
+#include "farhook.h"
 
 #pragma comment(lib, "d3d12.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -105,22 +105,6 @@ namespace ml::hooks
         ~CreateGuard() { if (!wasNested) t_inSwapChainCreate = false; }
     };
 
-    // How many of our wrappers are alive.
-    //
-    // The reentrancy guard above only catches a creation nested inside our own
-    // call, which is what happens while the game is making its first swapchain.
-    // Toggling frame generation later is not nested: the game asks Streamline to
-    // change mode, and Streamline rebuilds its swapchain from its own code, so
-    // the creation arrives here looking exactly like a fresh game-issued one.
-    // Wrapping it hands our object to code that allocated its own and expects to
-    // get that back, and re-pins the present queue to whichever queue Streamline
-    // passed rather than the game's.
-    //
-    // A live wrapper is what tells the two apart. The game cannot create a
-    // replacement for its own window without releasing the old one first, so if
-    // ours is still alive this creation belongs to somebody else. Leave it alone.
-    static volatile LONG g_liveWrappers = 0;
-
     // The window our wrapped (main) swapchain belongs to. The engine and Streamline
     // can spin up auxiliary swapchains on other windows; we only ever want the one
     // the game renders the world into. Locked on the first successful wrap so later
@@ -145,21 +129,8 @@ namespace ml::hooks
     static ID3D12DescriptorHeap*      g_rtvHeap     = nullptr;
     static ID3D12DescriptorHeap*      g_srvHeap     = nullptr;
     static ID3D12GraphicsCommandList* g_commandList = nullptr;
-    // SRV heap capacity: slot 0 ImGui font, slots 1-3 the fixed UI atlases,
-    // the rest a session budget for lazily-loaded per-item icons (~64KB of
-    // GPU memory each; see icons.cpp).
-    //
-    // Raised from 512 for Inventory -> Add Item: that browses the game's WHOLE
-    // item catalog rather than just what you carry, so the number of distinct
-    // icons a session can touch went from "a few hundred at most" to thousands.
-    // Icons are loaded on demand and never evicted, so the old budget ran out
-    // partway through browsing and every icon after it - including the ones in
-    // the Editor - silently drew blank for the rest of the session.
-    //
-    // The heap itself is cheap (a descriptor is 32 bytes; this is ~128KB). The
-    // real cost is one texture per icon actually looked at, so a session that
-    // never opens Add Item pays nothing extra. If this is ever exhausted again
-    // the answer is LRU eviction, not another bump.
+    // SRV heap capacity: slot 0 the ImGui font, slot 1 the offscreen target
+    // the composite pass samples. The rest is spare.
     static constexpr UINT             kSrvHeapSlots = 8;
     // The most-recent DIRECT queue confirmed to live on the swapchain's device
     // (i.e. the present queue). Published ONLY from hkExecuteCommandLists while
@@ -215,9 +186,7 @@ namespace ml::hooks
     static UINT                        g_offscreenW       = 0;
     static UINT                        g_offscreenH       = 0;
 
-    // Fixed SRV heap slot for the offscreen texture, reserved right after the
-    // ImGui font (slot 0). icons.cpp's fixed atlases + item-icon budget are
-    // pushed one slot later to make room (see the IconsInit call below).
+    // Fixed SRV heap slot for the offscreen texture, right after the ImGui font.
     static constexpr UINT kOffscreenSrvSlot = 1;
 
     static ID3D12RootSignature* g_compositeRootSig = nullptr;
@@ -274,6 +243,10 @@ namespace ml::hooks
 
     static bool CreateRenderTargets(IDXGISwapChain3* swapChain)
     {
+        // A failed ResizeFrameResources leaves no heap, or fewer frames than
+        // buffers. Refuse rather than write through a null heap.
+        if (!g_device || !g_rtvHeap || g_frames.size() < g_bufferCount)
+            return false;
         const UINT rtvSize = g_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
         D3D12_CPU_DESCRIPTOR_HANDLE handle = g_rtvHeap->GetCPUDescriptorHandleForHeapStart();
 
@@ -334,7 +307,7 @@ namespace ml::hooks
                 D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &clear,
                 IID_PPV_ARGS(&g_offscreenTex))))
             return false;
-        g_offscreenTex->SetName(L"MasterLooterOverlayOffscreen");
+        g_offscreenTex->SetName(L"ModActivatorOverlayOffscreen");
 
         D3D12_DESCRIPTOR_HEAP_DESC rtvDesc = {};
         rtvDesc.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
@@ -474,7 +447,9 @@ namespace ml::hooks
             if (f.commandAllocator) { f.commandAllocator->Release(); f.commandAllocator = nullptr; }
         if (g_rtvHeap) { g_rtvHeap->Release(); g_rtvHeap = nullptr; }
 
-        g_bufferCount = newCount;
+        // Zero until everything below exists. A count left at newCount after
+        // a failure would make the next reconcile think nothing changed.
+        g_bufferCount = 0;
         g_frames.clear();
         g_frames.resize(newCount);
 
@@ -484,6 +459,7 @@ namespace ml::hooks
         d.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
         if (FAILED(g_device->CreateDescriptorHeap(&d, IID_PPV_ARGS(&g_rtvHeap))))
         {
+            g_rtvHeap = nullptr;
             LOG_ERR("ResizeFrameResources: RTV heap (%u) creation failed.", newCount);
             return false;
         }
@@ -494,10 +470,12 @@ namespace ml::hooks
                     D3D12_COMMAND_LIST_TYPE_DIRECT,
                     IID_PPV_ARGS(&g_frames[i].commandAllocator))))
             {
+                g_frames[i].commandAllocator = nullptr;
                 LOG_ERR("ResizeFrameResources: command allocator %u creation failed.", i);
                 return false;
             }
         }
+        g_bufferCount = newCount;
         return true;
     }
 
@@ -547,36 +525,50 @@ namespace ml::hooks
         // Our last submit referenced the old buffers/allocators - retire it first.
         WaitForOverlayIdle();
 
+        // The new signature is recorded only once everything below exists.
+        // Recorded first, a failure here read as "unchanged" on the next
+        // frame, which then drew with no render targets or offscreen texture.
+        // On a failure the identity is forgotten instead, so the next frame
+        // tries the whole rebuild again. Said once per failing signature, not
+        // every frame.
+        static UINT s_failedW = 0, s_failedH = 0, s_failedCount = 0;
+        const auto fail = [&](const char* what) {
+            CleanupRenderTargets();
+            g_swapChain = nullptr;
+            if (s_failedW != newW || s_failedH != newH || s_failedCount != desc.BufferCount)
+            {
+                s_failedW = newW; s_failedH = newH; s_failedCount = desc.BufferCount;
+                LOG_ERR("ReconcileSwapChain: %s for %ux%u, %u buffers; the overlay retries next frame.",
+                        what, newW, newH, desc.BufferCount);
+            }
+            return false;
+        };
+
         if (desc.BufferCount != g_bufferCount)
         {
             if (!ResizeFrameResources(desc.BufferCount))
-                return false;
+                return fail("frame resources could not be rebuilt");
         }
         else
         {
             CleanupRenderTargets(); // same count, fresh buffers
         }
 
-        g_hwnd      = desc.OutputWindow;
-        g_swapChain = swapChain;
-        g_scWidth   = newW;
-        g_scHeight  = newH;
-        g_scFormat  = newFmt;
-
+        g_hwnd = desc.OutputWindow;
         if (!CreateRenderTargets(swapChain))
-        {
-            LOG_ERR("ReconcileSwapChain: render target rebuild failed.");
-            return false;
-        }
+            return fail("render targets could not be rebuilt");
 
         // ImGui's own DX12 backend is baked for a FIXED SDR format (see
         // InitImGui) and never needs rebuilding here - only the offscreen
         // target it draws into has to track the back buffer's size.
-        if (!CreateOffscreenTarget(g_scWidth, g_scHeight))
-        {
-            LOG_ERR("ReconcileSwapChain: offscreen target rebuild failed.");
-            return false;
-        }
+        if (!CreateOffscreenTarget(newW, newH))
+            return fail("the offscreen target could not be rebuilt");
+
+        g_swapChain = swapChain;
+        g_scWidth   = newW;
+        g_scHeight  = newH;
+        g_scFormat  = newFmt;
+        s_failedW = s_failedH = s_failedCount = 0;
 
         LOG("Swapchain reconciled (%ux%u, %u buffers, fmt %d) - in-place reconfigure.",
             g_scWidth, g_scHeight, g_bufferCount, static_cast<int>(g_scFormat));
@@ -585,11 +577,6 @@ namespace ml::hooks
 
     static bool InitImGui(IDXGISwapChain3* swapChain)
     {
-        // We only get here in the process that actually presents - open the
-        // console now and flush the buffered startup logs into it, and claim
-        // Trinity.ini so the launcher's copy of the ASI can never save over us.
-        ml::Mod::OnRenderProcess();
-
         if (FAILED(swapChain->GetDevice(IID_PPV_ARGS(&g_device))))
         {
             LOG_ERR("InitImGui: swapChain->GetDevice failed.");
@@ -612,8 +599,7 @@ namespace ml::hooks
         // live in hkExecuteCommandLists once g_device is known; DrawOverlay
         // simply skips frames until that has happened (typically 1 frame).
 
-        // Shader-visible SRV heap: slot 0 is the ImGui font atlas, slots 1+
-        // our own icon-atlas textures, then the per-item icon budget.
+        // Shader-visible SRV heap: the ImGui font atlas and the offscreen target.
         {
             D3D12_DESCRIPTOR_HEAP_DESC d = {};
             d.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
@@ -662,7 +648,7 @@ namespace ml::hooks
         g_commandList->Close();
         // Name it so DRED (DumpDred) can tell a fault in OUR overlay submit apart
         // from a Streamline / engine command list.
-        g_commandList->SetName(L"MasterLooterOverlayCmdList");
+        g_commandList->SetName(L"ModActivatorOverlayCmdList");
 
         // Fence so we never reset an allocator the GPU is still using.
         if (FAILED(g_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&g_fence))))
@@ -796,7 +782,7 @@ namespace ml::hooks
         // Pin our render targets to the live swapchain before touching them.
         // A DLSS Frame Generation toggle silently swaps it; if the rebuild
         // fails, sit this frame out rather than draw into freed buffers.
-        if (!ReconcileSwapChain(swapChain))
+        if (!ReconcileSwapChain(swapChain) || !g_offscreenTex || !g_rtvHeap)
             return false;
 
         if (!EnsureCompositePipeline(g_scFormat))
@@ -821,6 +807,9 @@ namespace ml::hooks
         // between frames, and only once our last submit has retired: the
         // backend releases the font texture to recreate it and the GPU may
         // still be reading the old one. The NewFrame below builds both again.
+        // A resolution change moves the UI scale, which InitStyle once took
+        // from the first swapchain only.
+        gui::SetDisplayHeight(static_cast<float>(g_scHeight));
         if (gui::FontsNeedRebuild())
         {
             WaitForOverlayIdle();
@@ -985,34 +974,6 @@ namespace ml::hooks
         if (!isGameFacing || (flags & DXGI_PRESENT_TEST))
             return false;
 
-#ifdef ML_NO_DRAW
-        // Test build. The swapchain is wrapped exactly as normal and then left
-        // completely alone: no ImGui init, no render targets, no descriptor
-        // heaps, no offscreen target, nothing submitted. Not one reference is
-        // taken on a back buffer.
-        //
-        // This is the only placement that answers the question. Wrapping does
-        // two separable things: it puts our proxy where the game expects its
-        // own swapchain, and it points our render target views at that chain's
-        // back buffers. The first version of this test returned after InitImGui
-        // had already run, so the render targets existed anyway and it would
-        // have proved nothing.
-        //
-        // Survives a frame generation toggle: the resources are the problem,
-        // and releasing them at the right moment keeps the overlay. Still dies:
-        // the proxy itself is the problem and the wrapper cannot stay.
-        {
-            static bool s_said = false;
-            if (!s_said)
-            {
-                s_said = true;
-                LOG("*** TEST BUILD: swapchain wrapped, nothing drawn and no GPU resources taken. ***");
-                LOG("    The menu will never appear. That is the point of the build.");
-            }
-        }
-        return false;
-#endif
-
         if (g_initFailed || g_renderDisabled)
             return false;
 
@@ -1170,25 +1131,16 @@ namespace ml::hooks
         WaitForOverlayIdle();
         CleanupRenderTargets();
     }
-    static void PostResizeRebuild(IDXGISwapChain3* swapChain)
+    // The views were dropped before the resize. They are not rebuilt here,
+    // inside the game's own ResizeBuffers call and outside the overlay's
+    // exception guard, where a failed rebuild used to write through a null
+    // RTV heap. Forgetting the chain makes the next drawn frame's
+    // ReconcileSwapChain rebuild everything, with every step checked. Until
+    // the menu is next drawn no back buffer is referenced at all.
+    static void PostResizeRebuild(IDXGISwapChain3*)
     {
         if (!g_imguiReady) return;
-        DXGI_SWAP_CHAIN_DESC desc = {};
-        if (SUCCEEDED(swapChain->GetDesc(&desc)))
-        {
-            if (desc.BufferCount != g_bufferCount)
-                ResizeFrameResources(desc.BufferCount);
-            g_hwnd      = desc.OutputWindow;
-            g_swapChain = swapChain;
-            g_scWidth   = desc.BufferDesc.Width;
-            g_scHeight  = desc.BufferDesc.Height;
-            g_scFormat  = desc.BufferDesc.Format;
-        }
-        CreateRenderTargets(swapChain);
-        // Must follow the g_scWidth/g_scHeight update above (and precede the
-        // next ReconcileSwapChain, which would otherwise see the new signature
-        // as "unchanged" and never resize the offscreen target to match).
-        CreateOffscreenTarget(g_scWidth, g_scHeight);
+        g_swapChain = nullptr;
     }
 
     // Restrict drawing to the actual game window, including when other
@@ -1300,9 +1252,27 @@ namespace ml::hooks
     // These are the drawing path ONLY when no wrapper is active (wrapping failed,
     // or a legacy no-proxy path). Once a wrapper owns drawing they forward
     // untouched - under DLSS-G the native present is Streamline's read-only frame.
+    // Whether a chain reaching the stacked Present detours is the game's.
+    // Those detours sit on the class, so every D3D12 swapchain in the process
+    // comes through them, including other overlays' windows. Drawing on such
+    // a chain made ReconcileSwapChain rebuild back and forth between the two
+    // every frame. The chain already drawn on is the common case and costs a
+    // compare; anything else is judged by its window: the one the game made
+    // its first full-size chain for, or failing that the foreground window.
+    static bool IsProbeChain(UINT w, UINT h);
+    static bool IsGameChain(IDXGISwapChain* swapChain)
+    {
+        if (!swapChain) return false;
+        if (g_swapChain && static_cast<IDXGISwapChain*>(g_swapChain) == swapChain) return true;
+        DXGI_SWAP_CHAIN_DESC desc = {};
+        if (FAILED(swapChain->GetDesc(&desc)) || !desc.OutputWindow) return false;
+        if (IsProbeChain(desc.BufferDesc.Width, desc.BufferDesc.Height)) return false;
+        return g_gameHwnd ? desc.OutputWindow == g_gameHwnd : IsGameWindow(desc.OutputWindow);
+    }
+
     static HRESULT WINAPI hkPresent(IDXGISwapChain3* swapChain, UINT syncInterval, UINT flags)
     {
-        const bool drew = RenderOverlay(swapChain, !g_wrapperActive, flags);
+        const bool drew = RenderOverlay(swapChain, !g_wrapperActive && IsGameChain(swapChain), flags);
         const HRESULT hr = oPresent(swapChain, syncInterval, flags);
         PostPresentDeviceCheck(drew);
         return hr;
@@ -1314,7 +1284,8 @@ namespace ml::hooks
     {
         // Only reached on the stacked path (see the factory hook), where the
         // chain is the game's own IDXGISwapChain4 and the cast holds.
-        const bool drew = RenderOverlay(static_cast<IDXGISwapChain3*>(swapChain), !g_wrapperActive, flags);
+        const bool drew = RenderOverlay(static_cast<IDXGISwapChain3*>(swapChain),
+                                        !g_wrapperActive && IsGameChain(swapChain), flags);
         const HRESULT hr = oPresent1(swapChain, syncInterval, flags, pp);
         PostPresentDeviceCheck(drew);
         return hr;
@@ -1381,6 +1352,19 @@ namespace ml::hooks
         return out;
     }
 
+    // This plugin's own file name, as OwningModule reports it. Looked up from
+    // a function inside it rather than written down, since the plugin can be
+    // renamed and was once a different project entirely.
+    static const char* OwnModuleName()
+    {
+        static const std::string name = [] {
+            char b[64] = "";
+            OwningModule(reinterpret_cast<void*>(&OwnModuleName), b, sizeof b);
+            return std::string(b);
+        }();
+        return name.c_str();
+    }
+
     // Forward declared: this wants to follow a detour, and the decoder is
     // defined below with the rest of the byte reading.
     static void DescribeDetour(const uint8_t* p, const void* at, char* out, size_t n);
@@ -1407,7 +1391,7 @@ namespace ml::hooks
     static bool IsSystemOwner(const char* mod)
     {
         return _stricmp(mod, "dxgi.dll") == 0 || _stricmp(mod, "d3d12.dll") == 0 ||
-               _stricmp(mod, "d3d12core.dll") == 0 || _stricmp(mod, "dxgi.DLL") == 0;
+               _stricmp(mod, "d3d12core.dll") == 0;
     }
 
     // Whether the module that owns an address actually lives in the Windows
@@ -1434,10 +1418,6 @@ namespace ml::hooks
         if (!n || n >= MAX_PATH) return false;
         return _strnicmp(path, sys, n) == 0 && (path[n] == '\\' || path[n] == '/');
     }
-
-    // The same question answered by where the module lives, which is the one
-    // that cannot be fooled. ReShade installs itself as dxgi.dll beside the
-    // game,
 
     // A function whose first bytes are already a jump has been detoured in
     // place by someone else. The owning module stays the system DLL in that
@@ -1542,8 +1522,6 @@ namespace ml::hooks
         return nullptr;
     }
 
-    // Returns false when someone else has already detoured this function, in
-    // which case stacking a second detour on top is what we must not do.
     // Which module's code an existing detour on fn lands in, following relay
     // stubs the way DescribeDetour does. False when fn is not detoured.
     static bool DetourOwner(void* fn, char* out, size_t n)
@@ -1579,7 +1557,7 @@ namespace ml::hooks
         if (!mod || !mod[0] || mod[0] == '?') return false;
         if (IsSystemOwner(mod)) return true;
         if (_stricmp(mod, "gameoverlayrenderer64.dll") == 0) return true;
-        if (_stricmp(mod, "MasterLooter.asi") == 0) return true;
+        if (_stricmp(mod, OwnModuleName()) == 0) return true;
         if (_strnicmp(mod, "sl.", 3) == 0 || _strnicmp(mod, "nvngx", 5) == 0) return true;
         return false;
     }
@@ -1699,7 +1677,6 @@ namespace ml::hooks
     public:
         explicit WrappedIDXGISwapChain(IDXGISwapChain4* inner) : m_inner(inner)
         {
-            InterlockedIncrement(&g_liveWrappers);
         }
 
         // IUnknown ----------------------------------------------------------
@@ -1756,7 +1733,6 @@ namespace ml::hooks
                                               // compares by pointer first, so a
                                               // recycled one would read as unchanged.
                 }
-                InterlockedDecrement(&g_liveWrappers);
                 delete this;
                 inner->Release();
             }
@@ -1916,15 +1892,6 @@ namespace ml::hooks
         }
     }
 
-    // Our replacement for the factory's CreateSwapChainForHwnd vtable slot. Calls
-    // the real slot (saved), then wraps the result. Not a MinHook detour - see
-    // InstallSwapChainCreationPatch.
-    // The four detour targets, read off the game's own objects. Slot numbers
-    // are the interface layout, which is fixed: Present is IDXGISwapChain[8],
-    // ResizeBuffers [13], SetColorSpace1 is IDXGISwapChain3[38], and
-    // ExecuteCommandLists is ID3D12CommandQueue[10]. Each still goes through
-    // LogHookTarget, so anything already detoured, owned by another module, or
-    // sitting in a proxy that borrows a system DLL's name is left alone.
     // The detour targets, read off the game's own objects. Slot numbers are the
     // interface layout, which is fixed: Present is IDXGISwapChain[8], Present1
     // [22], ResizeBuffers [13], SetColorSpace1 is IDXGISwapChain3[38],
@@ -1988,7 +1955,7 @@ namespace ml::hooks
         LOG("[overlay] %s. Trying again with a present call in another mod's proxy allowed.", why);
         if (InstallPass(true, true) == 0)
             LOG_ERR("[overlay] there is still nothing this mod can hook to draw the menu. The [hook] lines above name who owns each call. "
-                    "Looting is unaffected; the menu needs one of those mods out of the folder, or WrapSwapChain=1 with no swapchain-keying overlay loaded.");
+                    "Other mods are unaffected; the menu needs one of those mods out of the folder, or WrapSwapChain=1 with no swapchain-keying overlay loaded.");
     }
 
     // Started once, when the targets are first read. Every path that can draw
@@ -2139,51 +2106,14 @@ namespace ml::hooks
         if (ppSwapChain && *ppSwapChain)
             InstallDetoursFrom(*ppSwapChain, device, s_stack);
 
-        // Wrap the first swapchain and never a replacement.
+        // Replacements are wrapped, the same as the first one. What once
+        // killed the game on a frame generation toggle was not the proxy but
+        // render target views still holding the dying chain's back buffers;
+        // the wrapper's Release drops those now.
         //
-        // Measured on a 5060 Ti that reproduces this reliably. Six sessions,
-        // every one of them wrapping a replacement chain, every one of them
-        // dead within a couple of minutes of a frame generation toggle. A
-        // build that refuses to wrap at all survived repeated toggles in both
-        // directions, before and after loading a save. The first wrap never
-        // killed anything; the second always did.
-        //
-        // What the game does when it dies is read a null pointer, twice, in
-        // its own code: once loading an interface out of an object and calling
-        // through its vtable, once taking a getter's result and reading it at
-        // +0x30. The first of those is null-checked twenty bytes away on
-        // another path, so the game knows that pointer can be absent and
-        // assumes it cannot be there. Something it looks up during the rebuild
-        // is not found, and handing it our object in place of the real one is
-        // the obvious way to make a lookup keyed on that pointer miss.
-        //
-        // An earlier attempt gated this on a wrapper still being alive, which
-        // never fired: the game releases its swapchain before creating the
-        // replacement, so by then ours is gone. Whether one is alive is not
-        // the question. Whether we have already wrapped one is.
-        //
-        // The cost is the menu. After a toggle it stops drawing until the game
-        // is restarted, because the chain it drew through is gone and we are
-        // not taking the new one. That is the trade, and a menu that stops
-        // beats a game that stops.
-        // Replacements are wrapped, the same as the first one.
-        //
-        // Two builds refused them, on the theory that handing the game our
-        // proxy in place of its own swapchain was what killed it. That was
-        // wrong, and the test that settled it wrapped every replacement while
-        // taking no GPU resources at all: five recreations across repeated
-        // frame generation toggles, no crash. The proxy is not the problem.
-        //
-        // What was killing it is that the render target views held references
-        // to back buffers of a chain the game was destroying. Those are
-        // released in the wrapper's destructor now. See the comment there.
         // A full-size chain on some other window, once the game's is known, is
-        // another mod's surface. WrapSwapChain already leaves those alone, but
-        // the queue pin below did not: every creation re-pinned the present
-        // queue, authoritative, so a chain created by an overlay mod on its own
-        // window moved this mod's submits onto that mod's queue while the
-        // wrapper stayed on the game's chain. Nothing about that queue is ours
-        // to submit on. Left alone entirely, and said once per window.
+        // another mod's surface: no wrapper and no queue pin, since submitting
+        // on that mod's queue is not ours to do. Said once per window.
         if (g_wrappedHwnd && hwnd && hwnd != g_wrappedHwnd)
         {
             static HWND s_said = nullptr;
@@ -2226,13 +2156,6 @@ namespace ml::hooks
         return true;
     }
 
-    // Patch the factory CLASS's CreateSwapChainForHwnd slot (slot 15) so every
-    // swapchain the game creates comes back wrapped. We read the vtable from a
-    // dummy factory of the same class the game will use (a Streamline proxy factory
-    // when FG is present, since we go through the same DXGI entry points). No
-    // export detour, no reentrant MinHook -> cannot deadlock startup or fight
-    // Streamline's interposer. The patched vtable lives in the DLL and persists
-    // after the dummy factory is released.
     // Whether following the jumps from dxgi's entry reaches this mod's
     // detour. MinHook puts an E9 on the entry and a jmp [rip+0] in a relay
     // page beside it, so two hops is normal and eight is plenty.
@@ -2250,6 +2173,23 @@ namespace ml::hooks
             at = next;
         }
         return false;
+    }
+
+    // Whether following jumps from `from` ever lands on `at`.
+    static bool ChainPasses(void* from, void* at)
+    {
+        void* p = from;
+        for (int hop = 0; hop < 8 && p; ++hop)
+        {
+            if (p == at) return true;
+            if (IsBadReadPtr(p, 16)) return false;
+            uint8_t b[16];
+            memcpy(b, p, sizeof b);
+            void* next = nullptr;
+            if (!DetourTarget(b, p, &next) || !next) return false;
+            p = next;
+        }
+        return p == at;
     }
 
     // Character Creator 9 MinHooks this same entry, and CreateSwapChain beside
@@ -2272,23 +2212,6 @@ namespace ml::hooks
     // hook and dxgi. When the chain was correct after all, this mod is
     // entered twice, and the inner entry goes on through its own MinHook
     // trampoline rather than back into theirs, so the loop closes there.
-    // Whether following jumps from `from` ever lands on `at`.
-    static bool ChainPasses(void* from, void* at)
-    {
-        void* p = from;
-        for (int hop = 0; hop < 8 && p; ++hop)
-        {
-            if (p == at) return true;
-            if (IsBadReadPtr(p, 16)) return false;
-            uint8_t b[16];
-            memcpy(b, p, sizeof b);
-            void* next = nullptr;
-            if (!DetourTarget(b, p, &next) || !next) return false;
-            p = next;
-        }
-        return p == at;
-    }
-
     static void WatchCreationDetour()
     {
         HANDLE t = CreateThread(nullptr, 0, [](LPVOID) -> DWORD {
@@ -2462,7 +2385,7 @@ namespace ml::hooks
                 LOG("[creation] the in-place detour never went in, so this mod relies on the slot patch");
             else if (DetourOwner(g_factoryFn, owner, sizeof owner))
                 LOG("[creation] the entry it was installed on jumps into %s%s", owner[0] == '?' ? "an allocated stub" : owner,
-                    _stricmp(owner, "MasterLooter.asi") == 0 ? ", so the detour is still first in line"
+                    _stricmp(owner, OwnModuleName()) == 0 ? ", so the detour is still first in line"
                                                               : ", so something detoured it after this mod did");
             else
                 LOG("[creation] the entry it was installed on is not detoured any more: something put the original bytes back");
@@ -2511,94 +2434,6 @@ namespace ml::hooks
             LOG("DRED unavailable on this system - device-removed causes stay opaque.");
         }
     }
-
-    // --- Bootstrap: dummy device to locate the vtable slots -----------------
-    static bool GetVTableAddresses(void*& presentAddr, void*& resizeAddr, void*& execAddr, void*& colorSpaceAddr)
-    {
-        WNDCLASSEXW wc = { sizeof(wc) };
-        wc.lpfnWndProc   = DefWindowProcW;
-        wc.hInstance     = GetModuleHandleW(nullptr);
-        wc.lpszClassName = L"MasterLooterDummyWnd";
-        RegisterClassExW(&wc);
-
-        HWND hwnd = CreateWindowW(wc.lpszClassName, L"", WS_OVERLAPPEDWINDOW,
-                                  0, 0, 100, 100, nullptr, nullptr, wc.hInstance, nullptr);
-        if (!hwnd)
-        {
-            UnregisterClassW(wc.lpszClassName, wc.hInstance);
-            return false;
-        }
-
-        bool ok = false;
-        ID3D12Device*              device  = nullptr;
-        ID3D12CommandQueue*        queue   = nullptr;
-        ID3D12CommandAllocator*    alloc   = nullptr;
-        ID3D12GraphicsCommandList* list    = nullptr;
-        IDXGIFactory4*             factory = nullptr;
-        IDXGISwapChain1*           swap1   = nullptr;
-        IDXGISwapChain3*           swap3   = nullptr;
-
-        do
-        {
-            if (FAILED(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device))))
-                break;
-
-            D3D12_COMMAND_QUEUE_DESC qd = {};
-            qd.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-            if (FAILED(device->CreateCommandQueue(&qd, IID_PPV_ARGS(&queue))))
-                break;
-
-            if (FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&alloc))))
-                break;
-            if (FAILED(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, alloc, nullptr, IID_PPV_ARGS(&list))))
-                break;
-
-            if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))))
-                break;
-
-            DXGI_SWAP_CHAIN_DESC1 scd = {};
-            scd.BufferCount      = 2;
-            scd.Width            = 100;
-            scd.Height           = 100;
-            scd.Format           = DXGI_FORMAT_R8G8B8A8_UNORM;
-            scd.BufferUsage      = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-            scd.SampleDesc.Count = 1;
-            scd.SwapEffect       = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-            scd.AlphaMode        = DXGI_ALPHA_MODE_UNSPECIFIED;
-
-            if (FAILED(factory->CreateSwapChainForHwnd(queue, hwnd, &scd, nullptr, nullptr, &swap1)))
-                break;
-            if (FAILED(swap1->QueryInterface(IID_PPV_ARGS(&swap3))))
-                break;
-
-            // vtable[8]  IDXGISwapChain::Present
-            // vtable[13] IDXGISwapChain::ResizeBuffers
-            // vtable[38] IDXGISwapChain3::SetColorSpace1
-            void** swapVtbl = *reinterpret_cast<void***>(swap3);
-            presentAddr    = swapVtbl[8];
-            resizeAddr     = swapVtbl[13];
-            colorSpaceAddr = swapVtbl[38];
-
-            // vtable[10] ID3D12CommandQueue::ExecuteCommandLists
-            void** queueVtbl = *reinterpret_cast<void***>(queue);
-            execAddr = queueVtbl[10];
-
-            ok = true;
-        } while (false);
-
-        if (swap3)   swap3->Release();
-        if (swap1)   swap1->Release();
-        if (factory) factory->Release();
-        if (list)    list->Release();
-        if (alloc)   alloc->Release();
-        if (queue)   queue->Release();
-        if (device)  device->Release();
-        DestroyWindow(hwnd);
-        UnregisterClassW(wc.lpszClassName, wc.hInstance);
-        return ok;
-    }
-
-    bool MenuHasFrame() { return g_imguiReady; }
 
     static HMODULE FindReShade()
     {
@@ -2661,20 +2496,27 @@ namespace ml::hooks
                     reshade_api::version);
         }
 
-        // DLSS-G / Frame Generation: patch the factory's CreateSwapChainForHwnd
-        // slot so the game's swapchain comes back wrapped, letting the overlay
-        // draw into the writable game-facing buffer before Streamline interpolates.
-        // Best-effort: if it fails the native present hook still draws (non-FG).
-        //
-        // This is the part that reaches furthest into the process, since the
-        // patch goes into a vtable other overlay mods use as well. Anyone whose
-        // game will not start alongside another overlay can turn it off in the
-        // ini without launching the game, and keep everything else.
-        // Always. The factory hook is where the game's real swapchain and its
-        // queue first appear, and that is now the only place the detour
-        // targets can be learned from. Whether the chain is then wrapped is a
-        // separate decision, made inside the hook from WrapSwapChain.
+        // The factory detour is always installed: it is where the game's real
+        // swapchain and queue first appear, and so the only place the other
+        // detour targets can be read from. Whether the chain is then wrapped
+        // is decided inside it, from WrapSwapChain.
         InstallSwapChainCreationPatch();
+        // OverlayBlindWatch only starts once the creation detour has run, so
+        // it cannot report the case where it never runs at all. This one
+        // starts now and, if a minute passes without a single frame reaching
+        // any path, writes who owns each way the game can make a swapchain.
+        if (HANDLE watch = CreateThread(nullptr, 0, [](LPVOID) -> DWORD {
+                for (int i = 0; i < 300 && g_presentSeen.load(std::memory_order_relaxed) == 0; ++i)
+                    Sleep(200);
+                if (g_presentSeen.load(std::memory_order_relaxed) != 0)
+                    return 0;
+                LOG_ERR("[overlay] a minute after start no frame has reached this mod (creation detour ran %ld time(s)), so the menu cannot open. "
+                        "The [creation] lines below show where the game's swapchain creation goes instead.",
+                        g_factoryCalls.load(std::memory_order_relaxed));
+                LogSwapChainCreationPath();
+                return 0;
+            }, nullptr, 0, nullptr))
+            CloseHandle(watch);
         if (!Settings::Get().wrapSwapChain)
             LOG("WrapSwapChain=0: the swapchain is left alone. The overlay draws through the present hook, which does not show under DLSS frame generation.");
 
@@ -2684,53 +2526,5 @@ namespace ml::hooks
         exeName = exeName ? exeName + 1 : exePath;
         LOG("DX12 hooks installed (%s, pid %lu).", exeName, GetCurrentProcessId());
         return true;
-    }
-
-    void RemoveDX12Hooks()
-    {
-        MH_DisableHook(MH_ALL_HOOKS);
-        input::Shutdown();
-        hooks::RemoveXInputHooks();
-
-        if (g_imguiReady)
-        {
-            ImGui_ImplDX12_Shutdown();
-            ImGui_ImplWin32_Shutdown();
-            ImGui::DestroyContext();
-            g_imguiReady = false;
-        }
-
-        CleanupRenderTargets();
-        for (auto& f : g_frames)
-            if (f.commandAllocator) { f.commandAllocator->Release(); f.commandAllocator = nullptr; }
-        g_frames.clear();
-        g_swapChain   = nullptr;
-        g_bufferCount = 0;
-        g_scWidth     = 0;
-        g_scHeight    = 0;
-        g_scFormat    = DXGI_FORMAT_UNKNOWN;
-
-        ReleaseOffscreenTarget();
-        if (g_compositePSO)     { g_compositePSO->Release();     g_compositePSO     = nullptr; }
-        if (g_compositeRootSig) { g_compositeRootSig->Release(); g_compositeRootSig = nullptr; }
-        g_compositeFormat = DXGI_FORMAT_UNKNOWN;
-        g_colorSpace      = DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
-
-        if (g_queueLockReady)
-        {
-            EnterCriticalSection(&g_queueLock);
-            if (g_presentQueue) { g_presentQueue->Release(); g_presentQueue = nullptr; }
-            g_presentQueuePinned = false;
-            LeaveCriticalSection(&g_queueLock);
-            g_queueLockReady = false;
-            DeleteCriticalSection(&g_queueLock);
-        }
-
-        if (g_fenceEvent)  { CloseHandle(g_fenceEvent); g_fenceEvent = nullptr; }
-        if (g_fence)       { g_fence->Release();       g_fence = nullptr; }
-        if (g_commandList) { g_commandList->Release(); g_commandList = nullptr; }
-        if (g_srvHeap)     { g_srvHeap->Release();     g_srvHeap = nullptr; }
-        if (g_rtvHeap)     { g_rtvHeap->Release();     g_rtvHeap = nullptr; }
-        if (g_device)      { g_device->Release();      g_device = nullptr; }
     }
 }

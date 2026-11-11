@@ -184,11 +184,17 @@ static bool saveBinding(const Action &a, const std::string &expected,
       !CopyFileA(path.string().c_str(), backup.c_str(), TRUE))
     throw std::runtime_error("Could not create backup.");
   auto temporary = path.string() + ".modactivator.tmp";
+  // The name is ours alone, and every save happens under catalogMutex, so a
+  // file already there is left over from a save that died part way (the game
+  // closing mid-write). Remove it rather than refuse every later save.
+  if (GetFileAttributesA(temporary.c_str()) != INVALID_FILE_ATTRIBUTES &&
+      !DeleteFileA(temporary.c_str()))
+    throw std::runtime_error("A leftover " + std::filesystem::path(temporary).filename().string() +
+                             " could not be removed; delete it and save again.");
   HANDLE f = CreateFileA(temporary.c_str(), GENERIC_WRITE, 0, nullptr,
                          CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
   if (f == INVALID_HANDLE_VALUE)
-    throw std::runtime_error("Cannot create temporary config; check "
-                             "permissions or stale temp file.");
+    throw std::runtime_error("Cannot create temporary config; check permissions.");
   DWORD written = 0;
   bool ok =
       WriteFile(f, updated.data(), (DWORD)updated.size(), &written, nullptr) &&
@@ -213,6 +219,23 @@ static bool saveBinding(const Action &a, const std::string &expected,
   WritePrivateProfileStringA(nullptr, nullptr, nullptr, path.string().c_str());
   return true;
 }
+// The menu's copy of allBindings, taken once per change rather than every
+// frame. Render thread only. The copies keep their display strings cached
+// between frames, and new text is scanned for glyphs the atlas lacks.
+static unsigned bindingsSnapshotVersion = 0;
+static const std::vector<Action> &bindingsSnapshot() {
+  static std::vector<Action> list;
+  if (const unsigned current = catalogVersion.load(); current != bindingsSnapshotVersion) {
+    {
+      std::lock_guard<std::mutex> lock(catalogMutex);
+      list = allBindings;
+    }
+    bindingsSnapshotVersion = current;
+    for (const auto &a : list)
+      UI::noteGlyphs(a);
+  }
+  return list;
+}
 static void drawHotkeys() {
   static Action editing;
   static bool selected = false;
@@ -220,13 +243,9 @@ static void drawHotkeys() {
   static bool acknowledge = false;
   static HKL lastLayout = nullptr;
   static std::vector<int> recorded, proposed;
-  std::vector<Action> list;
-  {
-    std::lock_guard<std::mutex> lock(catalogMutex);
-    list = allBindings;
-  }
+  const auto &list = bindingsSnapshot();
   int exact = 0, overlap = 0;
-  for (auto &a : list) {
+  for (const auto &a : list) {
     if (a.severity == 2)
       ++exact;
     else if (a.severity == 1)
@@ -262,10 +281,10 @@ static void drawHotkeys() {
     UI::groupedBindings(list, [&](const Action &a) {
       ImGui::TableNextRow();
       ImGui::TableSetColumnIndex(0);
-      ImGui::PushID(identity(a).c_str());
+      ImGui::PushID(cachedIdentity(a).c_str());
       const auto rowLabel = UI::actionName(a);
       if (ImGui::Selectable(rowLabel.c_str(),
-                            selected && identity(a) == identity(editing),
+                            selected && cachedIdentity(a) == cachedIdentity(editing),
                             ImGuiSelectableFlags_SpanAllColumns)) {
         try {
           auto selectedSnapshot = readBytes(folder + a.file);
@@ -296,7 +315,7 @@ static void drawHotkeys() {
                 : a.severity == 1 ? UI::gold
                                   : ImVec4(.47f, .70f, .58f, 1));
       if (a.severity && ImGui::IsItemHovered())
-        ImGui::SetTooltip("%s", a.overlapNames.c_str());
+        ImGui::SetTooltip("%s", displayText(a.overlapNames).c_str());
       ImGui::PopID();
     }, 3);
     ImGui::EndTable();
@@ -346,11 +365,11 @@ static void drawHotkeys() {
       const auto ownKeys = openerKeys();
       bool clashes = conflict(proposed, ownKeys) != 0;
       for (auto &a : list)
-        if (identity(a) != identity(editing) &&
+        if (cachedIdentity(a) != cachedIdentity(editing) &&
             conflict(proposed, a.cachedKeys)) {
           clashes = true;
           ImGui::TextColored(ImVec4(1, .6f, .2f, 1), "Overlaps: %s",
-                             a.label.c_str());
+                             displayText(a.label).c_str());
         }
       if (conflict(proposed, ownKeys))
         ImGui::TextWrapped("Overlaps ModActivator (%s).",
@@ -364,8 +383,10 @@ static void drawHotkeys() {
           {
             std::lock_guard<std::mutex> lock(catalogMutex);
             changed = saveBinding(editing, snapshot, encoded);
-            if (changed)
+            if (changed) {
               restartRequired.insert(lower(editing.module));
+              catalogChanged();
+            }
           }
           message = changed
                         ? "Saved with .modactivator.bak backup. Restart the game to apply."

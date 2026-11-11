@@ -8,6 +8,10 @@ static std::vector<Action> catalog, allBindings;
 static std::deque<Action> pendingActions;
 static std::set<std::string> restartRequired;
 static std::atomic<bool> refreshRequested{false};
+// Bumped whenever catalog, allBindings or restartRequired change. The menu
+// copies them once per change instead of every frame.
+static std::atomic<unsigned> catalogVersion{1};
+static void catalogChanged() { catalogVersion.fetch_add(1); }
 static std::string lower(std::string s) {
   for (auto &c : s)
     c = (char)tolower((unsigned char)c);
@@ -85,6 +89,14 @@ static bool bindingField(const std::string &field) {
 static std::string identity(const Action &a) {
   return lower(a.file + "|" + a.section + "|" + a.key);
 }
+// The same, computed once per Action for the menu, which asks for it per
+// card and per row every frame. file, section and key never change after an
+// Action is built.
+static const std::string &cachedIdentity(const Action &a) {
+  if (a.ui.identity.empty())
+    a.ui.identity = identity(a);
+  return a.ui.identity;
+}
 // Overrides belong to ModActivator, keyed by the config path, section and field.
 static int readBindingType(const Action &action) {
   return GetPrivateProfileIntA("BindingTypes", identity(action).c_str(), 0,
@@ -105,6 +117,42 @@ static std::string trimConfigLine(const std::string &line) {
   return line.substr(start, line.find_last_not_of(" \t\r\n") - start + 1);
 }
 
+// --- text encodings -------------------------------------------------------
+// Windows hands this plugin names in the ANSI code page (module, file and
+// section names, values read through the profile API), while Dear ImGui
+// draws UTF-8. Anything shown in the menu goes through displayText.
+static bool isAscii(const std::string &s) {
+  return std::all_of(s.begin(), s.end(), [](unsigned char c) { return c < 0x80; });
+}
+static std::string narrowText(const wchar_t *wide, int count, UINT page) {
+  if (count <= 0)
+    return {};
+  const int n = WideCharToMultiByte(page, 0, wide, count, nullptr, 0, nullptr, nullptr);
+  if (n <= 0)
+    return {};
+  std::string out(n, '\0');
+  WideCharToMultiByte(page, 0, wide, count, out.data(), n, nullptr, nullptr);
+  return out;
+}
+static std::string convertText(const std::string &s, UINT from, UINT to) {
+  if (s.empty() || isAscii(s))
+    return s;
+  const int n = MultiByteToWideChar(from, 0, s.data(), (int)s.size(), nullptr, 0);
+  if (n <= 0)
+    return s;
+  std::wstring wide(n, L'\0');
+  MultiByteToWideChar(from, 0, s.data(), (int)s.size(), wide.data(), n);
+  const auto out = narrowText(wide.data(), n, to);
+  return out.empty() ? s : out;
+}
+static bool validUtf8(const std::string &s) {
+  return s.empty() || MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s.data(),
+                                          (int)s.size(), nullptr, 0) > 0;
+}
+static std::string displayText(const std::string &ansi) {
+  return convertText(ansi, CP_ACP, CP_UTF8);
+}
+
 struct BindingComment {
   std::string description;
   std::string classificationHint;
@@ -119,19 +167,32 @@ static BindingComments readBindingComments(const std::filesystem::path &path) {
   file.seekg(0);
   if (!file.read(content.data(), content.size()))
     return {};
-  if (content.compare(0, 3, "\xef\xbb\xbf") == 0)
+  // Descriptions are kept as UTF-8 for the menu. Section and field names are
+  // kept as the profile API reports them, so they still match the binding:
+  // the file's own bytes for a byte file, the ANSI code page for UTF-16.
+  bool textIsUtf8 = false, keysAreAnsi = false;
+  if (content.compare(0, 3, "\xef\xbb\xbf") == 0) {
     content.erase(0, 3);
-  else if (content.compare(0, 2, "\xff\xfe") == 0 ||
-           content.compare(0, 2, "\xfe\xff") == 0) {
+    textIsUtf8 = true;
+  } else if (content.compare(0, 2, "\xff\xfe") == 0 ||
+             content.compare(0, 2, "\xfe\xff") == 0) {
     const bool littleEndian = static_cast<unsigned char>(content[0]) == 0xff;
-    std::string ascii;
+    std::wstring wide;
     for (size_t i = 2; i + 1 < content.size(); i += 2) {
       const auto low = static_cast<unsigned char>(content[i + (littleEndian ? 0 : 1)]);
-      const auto high = content[i + (littleEndian ? 1 : 0)];
-      ascii += !high && low < 128 ? static_cast<char>(low) : ' ';
+      const auto high = static_cast<unsigned char>(content[i + (littleEndian ? 1 : 0)]);
+      wide += static_cast<wchar_t>(low | (high << 8));
     }
-    content = std::move(ascii);
+    content = narrowText(wide.data(), (int)wide.size(), CP_UTF8);
+    textIsUtf8 = keysAreAnsi = true;
+  } else {
+    // No BOM: UTF-8 when it decodes as UTF-8, the ANSI code page otherwise.
+    textIsUtf8 = validUtf8(content);
   }
+  const auto text = [&](const std::string &s) { return textIsUtf8 ? s : displayText(s); };
+  const auto name = [&](const std::string &s) {
+    return keysAreAnsi ? convertText(s, CP_UTF8, CP_ACP) : s;
+  };
 
   BindingComments comments;
   std::istringstream lines(content);
@@ -146,11 +207,11 @@ static BindingComments readBindingComments(const std::filesystem::path &path) {
       if (!previousComment.empty()) {
         if (!description.empty())
           description += '\n';
-        description += previousComment;
+        description += text(previousComment);
       }
     } else if (line[0] == '[') {
       const auto end = line.find(']');
-      section = end == line.npos ? "" : lower(trimConfigLine(line.substr(1, end - 1)));
+      section = end == line.npos ? "" : lower(name(trimConfigLine(line.substr(1, end - 1))));
       previousComment.clear();
       description.clear();
     } else {
@@ -159,9 +220,9 @@ static BindingComments readBindingComments(const std::filesystem::path &path) {
         const auto inlineComment = bindingComment(line, equals + 1);
         const auto note = inlineComment == line.npos
                               ? std::string{}
-                              : trimConfigLine(line.substr(inlineComment + 1));
+                              : text(trimConfigLine(line.substr(inlineComment + 1)));
         if (!note.empty() || !description.empty()) {
-          auto &entry = comments[{section, lower(trimConfigLine(line.substr(0, equals)))}];
+          auto &entry = comments[{section, lower(name(trimConfigLine(line.substr(0, equals))))}];
           entry.description = note.empty() || description.empty()
                                   ? note + description
                                   : note + "\n" + description;
@@ -214,6 +275,15 @@ static bool isReShadeName(const std::string &module) {
   std::lock_guard<std::mutex> lock(reshadeModuleMutex);
   return !reshadeModuleName.empty() && lower(module) == reshadeModuleName;
 }
+// Whether a wide path survives conversion to the ANSI code page unchanged.
+static bool representableInAnsi(const std::wstring &wide) {
+  if (wide.empty())
+    return true;
+  BOOL lossy = FALSE;
+  const int n = WideCharToMultiByte(CP_ACP, WC_NO_BEST_FIT_CHARS, wide.c_str(),
+                                    (int)wide.size(), nullptr, 0, nullptr, &lossy);
+  return n > 0 && !lossy;
+}
 static std::string moduleFor(const std::filesystem::path &rel,
                              const std::vector<std::string> &mods,
                              const std::string &reshade) {
@@ -246,6 +316,18 @@ static std::vector<Action> scanBindings(const std::vector<std::string> &mods,
       end;
   size_t files = 0;
   for (; it != end && !ec && files < 2000; it.increment(ec)) {
+    // Every config path is later handed to the ANSI profile API. A name the
+    // system code page cannot spell would make .string() throw and abort the
+    // whole scan, so such an entry, and everything below it, is skipped.
+    if (!representableInAnsi(it->path().native())) {
+      it.disable_recursion_pending();
+      static std::set<std::wstring> reported;
+      if (reported.insert(it->path().native()).second)
+        LOG_ERR("Skipped %s: its name uses characters outside the system code page, "
+                "so its settings cannot be read.",
+                reinterpret_cast<const char *>(it->path().u8string().c_str()));
+      continue;
+    }
     std::error_code statusError;
     const auto status = it->symlink_status(statusError);
     if (statusError || std::filesystem::is_symlink(status)) {
@@ -306,8 +388,20 @@ static std::vector<Action> scanBindings(const std::vector<std::string> &mods,
         a.toggle = a.featureRank > 0;
         a.cachedValue = read(a);
         a.cachedKeys = keysFrom(a, a.cachedValue, layout);
-        if (validShortcut(a.cachedKeys))
+        if (validShortcut(a.cachedKeys)) {
           found.push_back(std::move(a));
+        } else {
+          // Say once per value why a binding is missing, unless it is
+          // plainly switched off. Otherwise an unknown key name just
+          // vanishes from the menu.
+          const auto value = trimConfigLine(a.cachedValue.substr(0, a.cachedValue.find_first_of(";|")));
+          const auto folded = lower(value);
+          static std::set<std::string> reported;
+          if (!value.empty() && folded != "none" && folded != "0" &&
+              reported.insert(identity(a) + "=" + folded).second)
+            LOG("Skipped %s [%s] %s=%s: not a keyboard shortcut ModActivator can read.",
+                a.file.c_str(), a.section.c_str(), a.key.c_str(), value.c_str());
+        }
       }
     }
   }
@@ -397,6 +491,7 @@ static void refresh() {
     std::lock_guard<std::mutex> lock(catalogMutex);
     catalog = std::move(found);
     allBindings = std::move(all);
+    catalogChanged();
   } catch (const std::exception &e) {
     LOG_ERR("Discovery failed: %s", e.what());
   }

@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cfloat>
+#include <cmath>
 #include <cstdarg>
 #include <cstdio>
 #include <filesystem>
@@ -39,6 +40,13 @@ struct Action {
   int menuRank = 0;
   int featureRank = 0;
   std::string description;
+  // Strings the menu derives from the fields above, filled on first use and
+  // reused every frame after. Empty means not computed yet. The fields they
+  // come from are not changed once an Action is shown.
+  struct UiCache {
+    std::string identity, name, actionName, shortcut, search;
+  };
+  mutable UiCache ui;
 };
 static std::string read(const Action &a) {
   ++configReads;
@@ -56,8 +64,31 @@ static int vk(std::string s, HKL layout = gameKeyboardLayout(),
           s.end());
   for (auto &c : s)
     c = (char)toupper((unsigned char)c);
+  if (s.size() > 3 && s.compare(0, 3, "VK_") == 0)
+    s.erase(0, 3);
   if (s.empty() || s == "NONE")
     return 0;
+  // Other spellings mods use for the same keys. Only side-neutral and left
+  // modifier names map to the generic modifier: an injected generic Ctrl,
+  // Shift or Alt arrives as the left key, so a right-hand binding would not
+  // be honoured and is left unrecognised instead.
+  static const std::map<std::string, int> aliases{
+      {"CONTROL", 17}, {"LCTRL", 17}, {"LCONTROL", 17},
+      {"LSHIFT", 16},
+      {"LALT", 18}, {"LMENU", 18},
+      {"DEL", 46}, {"INS", 45}, {"BACK", 8}, {"PRIOR", 33}, {"NEXT", 34},
+      {"LEFTARROW", 37}, {"UPARROW", 38}, {"RIGHTARROW", 39}, {"DOWNARROW", 40},
+      {"PRINT", 44}, {"PRTSC", 44}, {"PRTSCN", 44}, {"SNAPSHOT", 44},
+      {"CAPS", 20}, {"CAPITAL", 20}, {"SCROLL", 145}, {"NUMLOCK", 144},
+      {"MULTIPLY", 106}, {"NUMPADMULTIPLY", 106}, {"NUMPAD*", 106},
+      {"ADD", 107}, {"NUMPADADD", 107}, {"NUMPADPLUS", 107},
+      {"SUBTRACT", 109}, {"NUMPADSUBTRACT", 109}, {"NUMPADMINUS", 109}, {"NUMPAD-", 109},
+      {"DECIMAL", 110}, {"NUMPADDECIMAL", 110}, {"NUMPADPERIOD", 110}, {"NUMPAD.", 110},
+      {"DIVIDE", 111}, {"NUMPADDIVIDE", 111}, {"NUMPAD/", 111}};
+  if (const auto alias = aliases.find(s); alias != aliases.end())
+    return alias->second;
+  if (s.size() == 4 && s.compare(0, 3, "NUM") == 0 && isdigit((unsigned char)s[3]))
+    return 96 + s[3] - '0';
   if (s == "CTRL")
     return 17;
   if (s == "SHIFT")
@@ -250,8 +281,13 @@ static std::vector<int> keysFrom(const Action &a, std::string s,
     out.push_back(k);
     return out;
   }
-  auto named = parseShortcut(s, layout, mainScan, standaloneDigit(a, s));
-  out.insert(out.end(), named.begin(), named.end());
+  // A modifier both required by a RequireX flag and typed in the value
+  // (Hotkey=Ctrl+F5 with RequireCtrl=1) is one key, not two. A modifier
+  // repeated within the value itself is still rejected by validShortcut.
+  const size_t required = out.size();
+  for (int k : parseShortcut(s, layout, mainScan, standaloneDigit(a, s)))
+    if (std::find(out.begin(), out.begin() + required, k) == out.begin() + required)
+      out.push_back(k);
   return out;
 }
 namespace ml::Log {
@@ -404,8 +440,18 @@ static bool queueAction(const Action &a) {
   return true;
 }
 namespace ml::gui {
-void InitStyle(float scale) {
-  UI::scale = (std::max)(0.8f, (std::min)(1.7f, scale));
+static float clampScale(float scale) { return (std::max)(0.8f, (std::min)(1.7f, scale)); }
+// Set by SetDisplayHeight when the swapchain's height implies another UI
+// scale; applied, with the fonts, by RebuildFonts between frames.
+static float pendingScale = 0;
+// The menu window was sized for the old scale; size it again once.
+static bool resizeWindow = false;
+
+static void ApplyStyle(float scale) {
+  UI::scale = clampScale(scale);
+  // From defaults every time: ScaleAllSizes multiplies what is there, so
+  // rescaling the previous style would compound.
+  ImGui::GetStyle() = ImGuiStyle();
   ImGui::StyleColorsDark();
   auto &style = ImGui::GetStyle();
   style.WindowPadding = {22, 20};
@@ -447,18 +493,124 @@ void InitStyle(float scale) {
   c[ImGuiCol_ScrollbarBg] = {0, 0, 0, 0};
   c[ImGuiCol_ScrollbarGrab] = {.30f, .30f, .32f, 1};
   style.ScaleAllSizes(UI::scale);
+}
+
+// Windows fonts that cover scripts Segoe UI does not. Only the first one
+// present in a group is loaded, and only when the menu has text in it: a CJK
+// font is tens of megabytes. The CJK group follows the Windows display
+// language, so kanji look Japanese to a Japanese reader and hanzi Chinese.
+struct FallbackGroup {
+  std::vector<const char *> files;
+  std::vector<std::pair<unsigned, unsigned>> blocks;
+};
+static std::vector<FallbackGroup> fallbackGroups() {
+  const LANGID ui = GetUserDefaultUILanguage();
+  std::vector<const char *> cjk{"msyh.ttc", "msjh.ttc", "YuGothM.ttc", "meiryo.ttc", "malgun.ttf"};
+  if (PRIMARYLANGID(ui) == LANG_JAPANESE)
+    cjk = {"YuGothM.ttc", "meiryo.ttc", "msyh.ttc", "msjh.ttc"};
+  else if (PRIMARYLANGID(ui) == LANG_CHINESE && SUBLANGID(ui) != SUBLANG_CHINESE_SIMPLIFIED &&
+           SUBLANGID(ui) != SUBLANG_CHINESE_SINGAPORE)
+    cjk = {"msjh.ttc", "msyh.ttc", "YuGothM.ttc"};
+  else if (PRIMARYLANGID(ui) == LANG_KOREAN)
+    cjk = {"malgun.ttf", "msyh.ttc", "YuGothM.ttc"};
+  return {
+      {cjk, {{0x2E80, 0x9FFF}, {0xF900, 0xFAFF}, {0xFE30, 0xFE4F}, {0xFF00, 0xFFEF}}},
+      {{"malgun.ttf", "gulim.ttc"}, {{0x1100, 0x11FF}, {0x3130, 0x318F}, {0xA960, 0xA97F}, {0xAC00, 0xD7FF}}},
+      {{"LeelawUI.ttf", "tahoma.ttf"}, {{0x0E00, 0x0EFF}}},
+      {{"Nirmala.ttf"}, {{0x0900, 0x0DFF}}},
+      {{"seguisym.ttf"}, {{0x2190, 0x2BFF}}},
+  };
+}
+
+static void BuildFonts() {
+  // Glyph ranges are read when the atlas is built, which is after this
+  // returns (the backend builds it on the next NewFrame), so they live here.
+  static ImVector<ImWchar> mainRanges, extraRanges;
   auto &io = ImGui::GetIO();
-  io.IniFilename = nullptr;
-  char fonts[MAX_PATH];
-  GetWindowsDirectoryA(fonts, MAX_PATH);
-  std::string font = std::string(fonts) + "\\Fonts\\segoeui.ttf";
-  if (GetFileAttributesA(font.c_str()) != INVALID_FILE_ATTRIBUTES) {
-    static const ImWchar ranges[] = {0x20, 0x024F, 0x0370, 0x052F, 0};
-    io.Fonts->AddFontFromFileTTF(font.c_str(), 17.0f * UI::scale, nullptr, ranges);
+  io.Fonts->Clear();
+  static const ImWchar base[] = {0x20, 0x024F, 0x0370, 0x052F, 0x2000, 0x206F, 0};
+  ImFontGlyphRangesBuilder builder;
+  builder.AddRanges(base);
+  for (const ImWchar c : UI::extraGlyphs)
+    builder.AddChar(c);
+  mainRanges.clear();
+  builder.BuildRanges(&mainRanges);
+
+  wchar_t windows[MAX_PATH]{};
+  GetWindowsDirectoryW(windows, MAX_PATH);
+  // ImGui opens font files from UTF-8 names.
+  const auto fontPath = [&](const char *file) {
+    const std::wstring path = std::wstring(windows) + L"\\Fonts\\" +
+                              std::wstring(file, file + strlen(file));
+    return GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES
+               ? std::string()
+               : narrowText(path.c_str(), (int)path.size(), CP_UTF8);
+  };
+  const float size = 17.0f * UI::scale;
+  const auto segoe = fontPath("segoeui.ttf");
+  if (segoe.empty() || !io.Fonts->AddFontFromFileTTF(segoe.c_str(), size, nullptr, mainRanges.Data)) {
+    ImFontConfig fallback;
+    fallback.SizePixels = size;
+    io.Fonts->AddFontDefault(&fallback);
+  }
+  if (UI::extraGlyphs.empty())
+    return;
+
+  ImFontGlyphRangesBuilder extra;
+  for (const ImWchar c : UI::extraGlyphs)
+    extra.AddChar(c);
+  extraRanges.clear();
+  extra.BuildRanges(&extraRanges);
+  // Merged fonts only add what the fonts before them lack, so Segoe UI keeps
+  // every glyph it has and each fallback fills in its own script.
+  for (const auto &group : fallbackGroups()) {
+    const bool needed = std::any_of(UI::extraGlyphs.begin(), UI::extraGlyphs.end(), [&](ImWchar c) {
+      return std::any_of(group.blocks.begin(), group.blocks.end(),
+                         [&](const auto &block) { return c >= block.first && c <= block.second; });
+    });
+    if (!needed)
+      continue;
+    for (const char *file : group.files) {
+      const auto path = fontPath(file);
+      if (path.empty())
+        continue;
+      ImFontConfig merge;
+      merge.MergeMode = true;
+      merge.OversampleH = 1; // dense scripts: half the atlas, no visible cost at this size
+      if (io.Fonts->AddFontFromFileTTF(path.c_str(), size, &merge, extraRanges.Data))
+        break;
+    }
   }
 }
-bool FontsNeedRebuild() { return false; }
-void RebuildFonts() {}
+
+void InitStyle(float scale) {
+  ApplyStyle(scale);
+  ImGui::GetIO().IniFilename = nullptr;
+  BuildFonts();
+  UI::glyphsChanged = false;
+  pendingScale = 0;
+}
+void SetDisplayHeight(float height) {
+  if (height <= 0)
+    return;
+  const float scale = clampScale(height / 1080.0f);
+  pendingScale = fabsf(scale - UI::scale) > 0.01f ? scale : 0;
+}
+bool FontsNeedRebuild() { return UI::glyphsChanged || pendingScale > 0; }
+// Between frames, after the backend has released its font texture.
+void RebuildFonts() {
+  if (pendingScale > 0) {
+    LOG("[overlay] UI scale %.2f -> %.2f for the new resolution.", UI::scale, pendingScale);
+    ApplyStyle(pendingScale);
+    pendingScale = 0;
+    resizeWindow = true;
+  }
+  if (UI::glyphsChanged)
+    LOG("[overlay] font atlas rebuilt for %zu characters outside Latin, Greek and Cyrillic.",
+        UI::extraGlyphs.size());
+  BuildFonts();
+  UI::glyphsChanged = false;
+}
 void PollToggle() {
   static bool was = false;
   static bool escapeWas = false;
@@ -518,13 +670,66 @@ void FeedInput() {
   if (c)
     input::FeedInput(io);
 }
+// The menu's copy of the cards, taken when the catalog or the card order
+// changes rather than every frame, with what each card needs worked out once:
+// which tab it is on, and whether its module is loaded, managed by ModHub or
+// waiting for a restart. Render thread only.
+struct CardState {
+  int tab = 0;
+  bool loaded = false, managed = false, restart = false;
+};
+struct MenuSnapshot {
+  unsigned catalog = 0, layout = 0, stamp = 0;
+  std::vector<Action> actions;
+  std::vector<CardState> cards;
+  std::map<int, int> counts;
+};
+static const MenuSnapshot &menuSnapshot() {
+  static MenuSnapshot snap;
+  const unsigned catalogNow = catalogVersion.load(), layoutNow = layoutVersion.load();
+  if (snap.catalog == catalogNow && snap.layout == layoutNow)
+    return snap;
+  std::set<std::string> restarts;
+  {
+    std::lock_guard<std::mutex> lock(catalogMutex);
+    snap.actions = catalog;
+    restarts = restartRequired;
+  }
+  // Fresh from the catalog on a layout change too: re-sorting the previous
+  // order would keep its leftovers.
+  orderActions(snap.actions);
+  const HMODULE modHub = GetModuleHandleA("ModHub.asi");
+  snap.cards.clear();
+  snap.counts.clear();
+  for (const auto &a : snap.actions) {
+    CardState card;
+    card.tab = actionTab(a);
+    const HMODULE module = previewMode ? GetModuleHandleA("kernel32.dll")
+                                       : GetModuleHandleA(a.module.c_str());
+    card.loaded = module != nullptr;
+    card.managed = !a.toggle && module && modHub && lower(a.module) != "modhub.asi" &&
+                   GetProcAddress(module, "ModHubMenuV1");
+    card.restart = restarts.count(lower(a.module)) != 0;
+    snap.cards.push_back(card);
+    ++snap.counts[card.tab];
+    UI::noteGlyphs(a);
+  }
+  for (const auto &[id, name] : modLayout.tabs)
+    UI::noteGlyphs(name);
+  snap.catalog = catalogNow;
+  snap.layout = layoutNow;
+  ++snap.stamp;
+  return snap;
+}
+
 void Render() {
   auto &s = State::Get();
   auto &io = ImGui::GetIO();
   float u = UI::scale;
   ImVec2 size{(std::min)(820 * u, io.DisplaySize.x - 32),
               (std::min)(740 * u, io.DisplaySize.y - 32)};
-  ImGui::SetNextWindowSize(size, ImGuiCond_FirstUseEver);
+  ImGui::SetNextWindowSize(size, resizeWindow ? ImGuiCond_Always : ImGuiCond_FirstUseEver);
+  resizeWindow = false;
   ImGui::SetNextWindowSizeConstraints(
       ImVec2((std::min)(540 * u, size.x), (std::min)(440 * u, size.y)),
       ImVec2(io.DisplaySize.x - 16, io.DisplaySize.y - 16));
@@ -542,34 +747,28 @@ void Render() {
     ImGui::Spacing();
     ImGui::SetNextItemWidth(
         (std::max)(180.0f, ImGui::GetContentRegionAvail().x - 126 * u));
-    ImGui::InputTextWithHint("##Search", "Search mods or shortcuts...",
-                             UI::search, sizeof UI::search);
+    if (ImGui::InputTextWithHint("##Search", "Search mods or shortcuts...",
+                                 UI::search, sizeof UI::search))
+      UI::noteGlyphs(std::string(UI::search)); // typed text can be in any script
     ImGui::SameLine();
     if (ImGui::Button("Refresh", ImVec2(112 * u, 0)))
       refreshRequested.store(true);
-    std::vector<Action> actions;
-    std::set<std::string> restarts;
-    {
-      std::lock_guard<std::mutex> lock(catalogMutex);
-      actions = catalog;
-      restarts = restartRequired;
-    }
-    orderActions(actions);
+    const auto &snap = menuSnapshot();
+    const auto &actions = snap.actions;
     std::map<int, std::string> tabs{{0, "Mod menus"}, {1, "Toggles"}, {2, "Hotkeys"}};
     tabs.insert(modLayout.tabs.begin(), modLayout.tabs.end());
     constexpr int settingsTab = 65536;
     tabs.emplace(settingsTab, "Settings");
-    std::map<int, int> counts;
-    for (const auto &a : actions)
-      ++counts[actionTab(a)];
+    const auto &counts = snap.counts;
     ImGui::Spacing();
     if (ImGui::BeginTabBar("Categories",
                            ImGuiTabBarFlags_NoCloseWithMiddleMouseButton |
                                ImGuiTabBarFlags_FittingPolicyScroll)) {
       static int lastTab = -1;
       for (const auto &[tab, name] : tabs) {
+        const auto counted = counts.find(tab);
         const std::string count = tab == 2 || tab == settingsTab
-                                      ? "" : "  " + std::to_string(counts[tab]);
+                                      ? "" : "  " + std::to_string(counted == counts.end() ? 0 : counted->second);
         const std::string title = name + count + "###Category" + std::to_string(tab);
         if (ImGui::BeginTabItem(title.c_str(), nullptr,
                                 previewMode && previewTab == tab
@@ -583,7 +782,7 @@ void Render() {
             if (tab == 2)
               drawHotkeys();
             else
-              drawSettings(actions);
+              drawSettings(actions, snap.stamp);
             ImGui::EndTabItem();
             continue;
           }
@@ -594,18 +793,14 @@ void Render() {
           int count = 0;
           PlacementDrop drop;
           static bool reorderFailed = false;
-          for (const auto &a : actions) {
-            if (actionTab(a) != tab || !UI::matches(a))
+          for (size_t i = 0; i < actions.size(); ++i) {
+            const auto &a = actions[i];
+            const auto &card = snap.cards[i];
+            if (card.tab != tab || !UI::matches(a))
               continue;
             ++count;
-            ImGui::PushID(identity(a).c_str());
-            HMODULE module = previewMode ? GetModuleHandleA("kernel32.dll")
-                                         : GetModuleHandleA(a.module.c_str());
-            bool managed = !a.toggle && module &&
-                           lower(a.module) != "modhub.asi" &&
-                           GetProcAddress(module, "ModHubMenuV1") &&
-                           GetModuleHandleA("ModHub.asi");
-            bool restart = restarts.count(lower(a.module));
+            ImGui::PushID(cachedIdentity(a).c_str());
+            const bool managed = card.managed, restart = card.restart;
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12 * u, 5 * u));
             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(10 * u, 3 * u));
             // The list owns scrolling, including when the cursor is over a card.
@@ -636,7 +831,7 @@ void Render() {
             ImGui::TextDisabled("%s", detail.c_str());
             ImGui::PopClipRect();
             ImGui::SetCursorPos(ImVec2(buttonX, top + 5 * u));
-            ImGui::BeginDisabled(!module || managed || restart);
+            ImGui::BeginDisabled(!card.loaded || managed || restart);
             if (ImGui::Button(a.toggle ? "Toggle" : "Open menu",
                               ImVec2(110 * u, 31 * u))) {
               if (queueAction(a) && !a.toggle)
@@ -680,15 +875,52 @@ void Render() {
 }
 
 } // namespace ml::gui
+// The folder in the ANSI code page, since every config is read through the
+// ANSI profile API. A folder name the code page cannot spell falls back to
+// its 8.3 short name; empty when neither works.
+static std::string ansiFolder(const std::wstring &wide) {
+  const auto convert = [](const std::wstring &w) -> std::string {
+    BOOL lossy = FALSE;
+    const int n = WideCharToMultiByte(CP_ACP, WC_NO_BEST_FIT_CHARS, w.c_str(), -1,
+                                      nullptr, 0, nullptr, &lossy);
+    if (n <= 1 || lossy)
+      return {};
+    std::string s(n - 1, '\0');
+    WideCharToMultiByte(CP_ACP, WC_NO_BEST_FIT_CHARS, w.c_str(), -1, s.data(), n,
+                        nullptr, nullptr);
+    return s;
+  };
+  auto result = convert(wide);
+  if (result.empty()) {
+    wchar_t shortPath[MAX_PATH]{};
+    const DWORD n = GetShortPathNameW(wide.c_str(), shortPath, MAX_PATH);
+    if (n && n < MAX_PATH)
+      result = convert(shortPath);
+  }
+  if (!result.empty() && result.back() != '\\' && result.back() != '/')
+    result += '\\';
+  return result;
+}
 static DWORD WINAPI start(void *arg) {
   char p[MAX_PATH];
   GetModuleFileNameA(nullptr, p, MAX_PATH);
   const char *name = strrchr(p, '\\');
   if (_stricmp(name ? name + 1 : p, "CrimsonDesert.exe"))
     return 0;
-  GetModuleFileNameA((HMODULE)arg, p, MAX_PATH);
-  folder = std::string(p);
-  folder = folder.substr(0, folder.find_last_of("\\/") + 1);
+  wchar_t self[MAX_PATH]{};
+  const DWORD selfLength = GetModuleFileNameW((HMODULE)arg, self, MAX_PATH);
+  std::wstring selfFolder(self, selfLength < MAX_PATH ? selfLength : 0);
+  selfFolder = selfFolder.substr(0, selfFolder.find_last_of(L"\\/") + 1);
+  folder = ansiFolder(selfFolder);
+  if (folder.empty()) {
+    // Nothing can be read or written beside the plugin. The log goes to the
+    // working directory instead so the reason is on record.
+    ml::Log::Begin();
+    LOG_ERR("Mod Activator " MODACTIVATOR_VERSION " cannot use its folder: the path "
+            "contains characters outside the system code page and has no short name. "
+            "Move the game to a path with plain characters, or enable 8.3 names on that drive.");
+    return 0;
+  }
   loadLayout();
   const auto config = folder + "ModActivator.ini";
   ml::Settings::Get().wrapSwapChain =
@@ -697,14 +929,21 @@ static DWORD WINAPI start(void *arg) {
       GetPrivateProfileIntA("General", "EnableDred", 0, config.c_str()) != 0;
   ml::Settings::Get().debugInput =
       GetPrivateProfileIntA("General", "DebugInput", 0, config.c_str()) != 0;
+  ml::Settings::Get().hookXInput =
+      GetPrivateProfileIntA("General", "HookXInput", 1, config.c_str()) != 0;
   ml::Log::Begin();
   LOG("Mod Activator " MODACTIVATOR_VERSION " started.");
-  if (MH_Initialize() != MH_OK)
+  if (const auto status = MH_Initialize(); status != MH_OK) {
+    LOG_ERR("MinHook failed to initialise (%s). No hooks were installed, so the menu cannot open.",
+            MH_StatusToString(status));
     return 0;
+  }
   const bool useReShadeEvents =
       GetPrivateProfileIntA("General", "UseReShadeEvents", 1, config.c_str()) != 0;
-  if (!ml::hooks::InstallDX12Hooks((HMODULE)arg, useReShadeEvents))
+  if (!ml::hooks::InstallDX12Hooks((HMODULE)arg, useReShadeEvents)) {
+    LOG_ERR("The DirectX hooks could not be installed, so the menu cannot open.");
     return 0;
+  }
   if (HANDLE h = CreateThread(nullptr, 0, dispatch, nullptr, 0, nullptr))
     CloseHandle(h);
   return 0;
@@ -717,6 +956,10 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD why, LPVOID) {
   }
   return TRUE;
 }
+// --- test entry points ----------------------------------------------------
+// Called by the suites in tests/ through build/ModActivator-tests.asi. Only
+// compiled with MODACTIVATOR_TESTS, so the shipped plugin exports none of them.
+#ifdef MODACTIVATOR_TESTS
 extern "C" __declspec(dllexport) int ModActivatorReliabilityTest() {
   if (!folder.empty())
     return -1;
@@ -861,6 +1104,7 @@ ModActivatorSettingsTest(const char *root) {
       return 4;
     opener.store(defaultOpener);
     modLayout = {};
+    ++layoutVersion;
     loadLayout();
     if (openerKeys() != std::vector<int>{VK_CONTROL, VK_BACK} ||
         modLayout.tabs[firstCustomTab] != "Test tab" ||
@@ -878,6 +1122,7 @@ ModActivatorSettingsTest(const char *root) {
     if (!saveLayout(std::move(moved)))
       return 7;
     modLayout = {};
+    ++layoutVersion;
     loadLayout();
     if (actionTab(third) != 1 || third.toggle || actionTab(toggle) != 0 || !toggle.toggle)
       return 9;
@@ -892,6 +1137,7 @@ ModActivatorSettingsTest(const char *root) {
   folder.clear();
   opener.store(defaultOpener);
   modLayout = {};
+  ++layoutVersion;
   refreshRequested.store(false);
   return result;
 }
@@ -901,9 +1147,10 @@ extern "C" __declspec(dllexport) int ModActivatorSelfTest() {
     return 1;
   return 0;
 }
-extern "C" __declspec(dllexport) int
-ModActivatorDiscoveryTest(const char *root, const char *modules, char *out,
-                          int capacity) {
+// Scans root for the given ';'-separated modules and writes one line per
+// selected binding: module|file|section|key|vk,vk,...
+static int discoveryReport(const char *root, const char *modules, char *out, int capacity,
+                           bool toggles) {
   if (!folder.empty() || !root || !modules || !out || capacity < 1)
     return -1;
   folder = root;
@@ -919,7 +1166,7 @@ ModActivatorDiscoveryTest(const char *root, const char *modules, char *out,
   }
   std::string report;
   try {
-    for (auto &a : selectActions(scanBindings(names))) {
+    for (auto &a : selectActions(scanBindings(names), toggles)) {
       report += a.module + "|" + a.file + "|" + a.section + "|" + a.key + "|";
       for (int k : a.cachedKeys)
         report += std::to_string(k) + ",";
@@ -935,40 +1182,13 @@ ModActivatorDiscoveryTest(const char *root, const char *modules, char *out,
   memcpy(out, report.c_str(), report.size() + 1);
   return (int)report.size();
 }
-
 extern "C" __declspec(dllexport) int
-ModActivatorToggleDiscoveryTest(const char *root, const char *modules,
-                                char *out, int capacity) {
-  if (!folder.empty() || !root || !modules || !out || capacity < 1)
-    return -1;
-  folder = root;
-  std::vector<std::string> names;
-  std::string list = modules;
-  size_t pos = 0;
-  while (pos < list.size()) {
-    auto end = list.find(';', pos);
-    names.push_back(list.substr(pos, end == list.npos ? end : end - pos));
-    if (end == list.npos)
-      break;
-    pos = end + 1;
-  }
-  std::string report;
-  try {
-    for (auto &a : selectActions(scanBindings(names), true)) {
-      report += a.module + "|" + a.file + "|" + a.section + "|" + a.key + "|";
-      for (int k : a.cachedKeys)
-        report += std::to_string(k) + ",";
-      report += "\n";
-    }
-  } catch (...) {
-    folder.clear();
-    return -2;
-  }
-  folder.clear();
-  if ((int)report.size() >= capacity)
-    return -3;
-  memcpy(out, report.c_str(), report.size() + 1);
-  return (int)report.size();
+ModActivatorDiscoveryTest(const char *root, const char *modules, char *out, int capacity) {
+  return discoveryReport(root, modules, out, capacity, false);
+}
+extern "C" __declspec(dllexport) int
+ModActivatorToggleDiscoveryTest(const char *root, const char *modules, char *out, int capacity) {
+  return discoveryReport(root, modules, out, capacity, true);
 }
 extern "C" __declspec(dllexport) int
 ModActivatorEditorTest(const char *root, const char *file, const char *sec,
@@ -1025,6 +1245,8 @@ extern "C" __declspec(dllexport) int ModActivatorResponsivenessTest() {
       allBindings.push_back(a);
     }
   }
+  catalogChanged();
+  ++layoutVersion;
   auto *context = ImGui::CreateContext();
   auto &io = ImGui::GetIO();
   io.DisplaySize = ImVec2(1280, 720);
@@ -1047,6 +1269,8 @@ extern "C" __declspec(dllexport) int ModActivatorResponsivenessTest() {
     std::lock_guard<std::mutex> lock(catalogMutex);
     allBindings = std::move(old);
   }
+  catalogChanged();
+  ++layoutVersion;
   return reads ? 3 : 0;
 }
 
@@ -1094,6 +1318,8 @@ extern "C" __declspec(dllexport) int ModActivatorPreview(const char *path,
   allBindings[3].overlapNames = "Another mod - Settings shortcut";
   allBindings[4].severity = 2;
   allBindings[4].overlapNames = "Another mod - Menu shortcut";
+  catalogChanged();
+  ++layoutVersion;
   auto *ctx = ImGui::CreateContext();
   auto &io = ImGui::GetIO();
   io.DisplaySize = ImVec2(1000, 860);
@@ -1163,6 +1389,8 @@ extern "C" __declspec(dllexport) int ModActivatorScrollTest() {
     action.cachedKeys = {119};
     catalog.push_back(action);
   }
+  catalogChanged();
+  ++layoutVersion;
   previewMode = true;
   previewTab = 0;
   ml::State::Get().menuOpen = true;
@@ -1198,6 +1426,8 @@ extern "C" __declspec(dllexport) int ModActivatorScrollTest() {
     }
   }
   catalog.clear();
+  catalogChanged();
+  ++layoutVersion;
   previewMode = false;
   ImGui::DestroyContext(context);
   return result;
@@ -1222,6 +1452,8 @@ extern "C" __declspec(dllexport) int ModActivatorDragTest(const char *root) {
     a.cachedKeys = {VK_F8};
     catalog.push_back(a);
   }
+  catalogChanged();
+  ++layoutVersion;
   previewMode = true;
   previewTab = 0;
   ml::State::Get().menuOpen = true;
@@ -1257,6 +1489,7 @@ extern "C" __declspec(dllexport) int ModActivatorDragTest(const char *root) {
     frame();
 
     modLayout = {};
+    ++layoutVersion;
     loadLayout();
     auto ordered = catalog;
     orderActions(ordered);
@@ -1273,6 +1506,8 @@ extern "C" __declspec(dllexport) int ModActivatorDragTest(const char *root) {
   }
   catalog.clear();
   modLayout = {};
+  catalogChanged();
+  ++layoutVersion;
   folder.clear();
   previewMode = false;
   ml::State::Get().menuOpen = false;
@@ -1335,3 +1570,133 @@ extern "C" __declspec(dllexport) int ModActivatorGroupsTest() {
   ImGui::DestroyContext(context);
   return result;
 }
+
+// Text encodings, glyph coverage, live UI scale and the menu's per-change
+// caching. root is an empty folder for config fixtures.
+extern "C" __declspec(dllexport) int ModActivatorTextTest(const char *root) {
+  if (!folder.empty() || !root)
+    return -1;
+  const std::string dir = root;
+  const auto write = [&](const char *name, const std::string &bytes) {
+    std::ofstream(dir + name, std::ios::binary) << bytes;
+    return std::filesystem::path(dir + name);
+  };
+  const bool westernAnsi = GetACP() == 1252;
+  const std::string chinese = "\xe6\x89\x93\xe5\xbc\x80\xe8\x8f\x9c\xe5\x8d\x95"; // 打开菜单
+
+  // UTF-16 comments are decoded instead of turned into spaces, and their
+  // section and field names still match what the profile API reports.
+  std::wstring wide = L"\xfeff[Men\u00fc]\r\n; \u6253\u5f00\u83dc\u5355\r\nHotkey=F6\r\n";
+  auto comments = readBindingComments(
+      write("utf16.ini", std::string(reinterpret_cast<const char *>(wide.data()), wide.size() * 2)));
+  const std::string section = westernAnsi ? "men\xfc" : lower(convertText("Men\xc3\xbc", CP_UTF8, CP_ACP));
+  const auto utf16 = comments.find({section, "hotkey"});
+  if (utf16 == comments.end() || utf16->second.description != chinese)
+    return 1;
+  // UTF-8 without a BOM is kept as it is.
+  comments = readBindingComments(write("utf8.ini", "[Menu]\n; \xc3\x96" "ffnet das Men\xc3\xbc\nHotkey=F6\n"));
+  if (comments[{"menu", "hotkey"}].description != "\xc3\x96" "ffnet das Men\xc3\xbc")
+    return 2;
+  // Anything else is the ANSI code page, converted for display.
+  if (westernAnsi) {
+    comments = readBindingComments(write("ansi.ini", "[Menu]\n; \xd6" "ffnet das Men\xfc\nHotkey=F6\n"));
+    if (comments[{"menu", "hotkey"}].description != "\xc3\x96" "ffnet das Men\xc3\xbc")
+      return 3;
+    Action ansiName{"x", "Men\xfc" "Mod.asi", "x.ini", "Menu", "Hotkey"};
+    if (UI::name(ansiName) != "Men\xc3\xbc Mod")
+      return 4;
+  }
+
+  auto *context = ImGui::CreateContext();
+  auto &io = ImGui::GetIO();
+  io.DisplaySize = ImVec2(1280, 720);
+  io.DeltaTime = 1.0f / 60;
+  int result = 0;
+  UI::extraGlyphs.clear();
+  ml::gui::InitStyle(1.0f);
+  // Latin text needs nothing new; Chinese text schedules a rebuild that
+  // merges a Windows font holding those characters.
+  UI::noteGlyphs(std::string("Men\xc3\xbc \xc3\x96" "ffnen"));
+  if (ml::gui::FontsNeedRebuild())
+    result = 5;
+  UI::noteGlyphs(chinese);
+  if (!result && (!ml::gui::FontsNeedRebuild() || UI::extraGlyphs.size() != 4))
+    result = 6;
+  if (!result) {
+    ml::gui::RebuildFonts();
+    unsigned char *pixels;
+    int w, h;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
+    if (ml::gui::FontsNeedRebuild() || io.Fonts->ConfigData.Size < 2 ||
+        !io.Fonts->Fonts[0]->FindGlyphNoFallback(0x6253))
+      result = 7;
+  }
+  // The UI scale follows the target height, from the default style each
+  // time, so scaling up and back down returns exactly to the start.
+  const float padding = ImGui::GetStyle().WindowPadding.x;
+  if (!result) {
+    ml::gui::SetDisplayHeight(2160);
+    if (!ml::gui::FontsNeedRebuild())
+      result = 8;
+    ml::gui::RebuildFonts();
+    ml::gui::SetDisplayHeight(2160);
+    if (!result && (UI::scale != 1.7f || ImGui::GetStyle().WindowPadding.x != floorf(padding * 1.7f) ||
+                    io.Fonts->ConfigData[0].SizePixels != 17.0f * 1.7f || ml::gui::FontsNeedRebuild()))
+      result = 9;
+    ml::gui::SetDisplayHeight(1080);
+    ml::gui::RebuildFonts();
+    if (!result && (UI::scale != 1.0f || ImGui::GetStyle().WindowPadding.x != padding))
+      result = 10;
+  }
+  // The menu copies the catalog once per change, not once per frame.
+  if (!result) {
+    unsigned char *pixels;
+    int w, h;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
+    {
+      std::lock_guard<std::mutex> lock(catalogMutex);
+      catalog.clear();
+      for (int i = 0; i < 3; ++i) {
+        Action a{"Card", "Card" + std::to_string(i) + ".asi", "Card.ini", "Menu", std::to_string(i)};
+        a.cachedKeys = {VK_F8};
+        catalog.push_back(a);
+      }
+    }
+    catalogChanged();
+    ml::State::Get().menuOpen = true;
+    const auto frame = [] {
+      ImGui::NewFrame();
+      ml::gui::Render();
+      ImGui::Render();
+    };
+    frame();
+    const unsigned stamp = ml::gui::menuSnapshot().stamp;
+    for (int i = 0; i < 10; ++i)
+      frame();
+    const auto &snap = ml::gui::menuSnapshot();
+    if (snap.stamp != stamp || snap.actions.size() != 3 || snap.actions[0].ui.name.empty())
+      result = 11;
+    {
+      std::lock_guard<std::mutex> lock(catalogMutex);
+      catalog.push_back(catalog.front());
+    }
+    frame();
+    if (!result && ml::gui::menuSnapshot().actions.size() != 3)
+      result = 12; // copied without a change being announced
+    catalogChanged();
+    frame();
+    if (!result && ml::gui::menuSnapshot().actions.size() != 4)
+      result = 13;
+  }
+  {
+    std::lock_guard<std::mutex> lock(catalogMutex);
+    catalog.clear();
+  }
+  catalogChanged();
+  ml::State::Get().menuOpen = false;
+  UI::extraGlyphs.clear();
+  UI::glyphsChanged = false;
+  ImGui::DestroyContext(context);
+  return result;
+}
+#endif // MODACTIVATOR_TESTS

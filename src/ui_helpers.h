@@ -51,6 +51,18 @@ static std::string keyName(int k) {
     return "Insert";
   case 46:
     return "Delete";
+  case 106:
+    return "Multiply";
+  case 107:
+    return "Add";
+  case 109:
+    return "Subtract";
+  case 110:
+    return "Decimal";
+  case 111:
+    return "Divide";
+  case 144:
+    return "NumLock";
   case 145:
     return "ScrollLock";
   case 192:
@@ -172,9 +184,39 @@ static float scale = 1.0f;
 static char search[128] = "";
 static const ImVec4 gold{0.84f, 0.69f, 0.43f, 1.0f},
     muted{0.57f, 0.59f, 0.62f, 1.0f};
+// --- glyphs the font atlas needs ---------------------------------------------
+// The atlas is built for Latin, Greek and Cyrillic. Text drawn by the menu is
+// scanned as it arrives, and any other character is recorded here; the render
+// hook then rebuilds the atlas between frames with those characters, merged
+// from a Windows font that has them (see BuildFonts in activator.cpp). Render
+// thread only.
+static std::set<ImWchar> extraGlyphs;
+static bool glyphsChanged = false;
+static bool inBaseGlyphs(unsigned c) {
+  return c < 0x80 || (c >= 0x80 && c <= 0x24F) || (c >= 0x370 && c <= 0x52F) ||
+         (c >= 0x2000 && c <= 0x206F);
+}
+static void noteGlyphs(const std::string &utf8) {
+  const char *p = utf8.c_str(), *end = p + utf8.size();
+  while (p < end) {
+    unsigned c = 0;
+    const int n = ImTextCharFromUtf8(&c, p, end);
+    if (n <= 0)
+      break;
+    p += n;
+    // ImWchar is 16 bits in this build. 6000 extra characters is a few
+    // megabytes of atlas at the largest UI scale, and a ceiling on it.
+    if (!inBaseGlyphs(c) && c <= 0xFFFF && c != 0xFFFD && extraGlyphs.size() < 6000 &&
+        extraGlyphs.insert(static_cast<ImWchar>(c)).second)
+      glyphsChanged = true;
+  }
+}
+
 static std::string name(const Action &a) {
+  if (!a.ui.name.empty())
+    return a.ui.name;
   if (isReShadeName(a.module))
-    return "ReShade";
+    return a.ui.name = "ReShade";
   std::string raw = std::filesystem::path(a.module).stem().string(), out;
   for (size_t i = 0; i < raw.size(); ++i) {
     unsigned char c = raw[i];
@@ -182,9 +224,11 @@ static std::string name(const Action &a) {
       out += ' ';
     out += c == '_' ? ' ' : c;
   }
-  return out;
+  return a.ui.name = displayText(out);
 }
 static std::string actionName(const Action &a) {
+  if (!a.ui.actionName.empty())
+    return a.ui.actionName;
   // Keep the INI action separate from classification and tab placement.
   std::string raw = a.key;
   auto folded = lower(raw);
@@ -212,19 +256,44 @@ static std::string actionName(const Action &a) {
   }
   out = trimConfigLine(out);
   if (out.empty())
-    return a.key;
+    return a.ui.actionName = displayText(a.key);
   out.front() = (char)toupper((unsigned char)out.front());
-  return out;
+  return a.ui.actionName = displayText(out);
 }
 static std::string shortcut(const Action &a) {
+  if (!a.ui.shortcut.empty())
+    return a.ui.shortcut;
+  // Key labels come from the active keyboard layout, which is read once per
+  // Action here. A layout change triggers a refresh, which builds new ones.
   auto out = shortcutLabel(a.cachedKeys);
-  return out.empty() ? a.cachedValue : out;
+  return a.ui.shortcut = out.empty() ? displayText(a.cachedValue) : out;
 }
 static bool matches(const Action &a) {
-  return !search[0] ||
-         lower(a.module + " " + name(a) + " " + a.label + " " + actionName(a) +
-               " " + a.description + " " + a.cachedValue + " " + shortcut(a))
-                 .find(lower(search)) != std::string::npos;
+  if (!search[0])
+    return true;
+  static std::string lastSearch, needle;
+  if (lastSearch != search) {
+    lastSearch = search;
+    needle = lower(search);
+  }
+  if (a.ui.search.empty())
+    a.ui.search = lower(displayText(a.module) + " " + name(a) + " " + displayText(a.label) +
+                        " " + actionName(a) + " " + a.description + " " +
+                        displayText(a.cachedValue) + " " + shortcut(a));
+  return a.ui.search.find(needle) != std::string::npos;
+}
+// Everything the menu may draw for one binding, for the glyph scan.
+static void noteGlyphs(const Action &a) {
+  if (isAscii(a.module) && isAscii(a.label) && isAscii(a.description) &&
+      isAscii(a.cachedValue) && isAscii(a.overlapNames) && isAscii(a.file) &&
+      isAscii(a.section) && isAscii(a.key)) {
+    noteGlyphs(shortcut(a)); // a localized key label can still be non-Latin
+    return;
+  }
+  for (const auto &text : {name(a), actionName(a), shortcut(a), a.description,
+                           displayText(a.label), displayText(a.file),
+                           displayText(a.section), displayText(a.overlapNames)})
+    noteGlyphs(text);
 }
 static void bindingTooltip(const Action &a, const std::string &detail = {}) {
   if (!ImGui::BeginTooltip())
@@ -232,7 +301,8 @@ static void bindingTooltip(const Action &a, const std::string &detail = {}) {
   const auto title = name(a) + " / " + actionName(a);
   ImGui::TextUnformatted(title.c_str());
   ImGui::TextDisabled("%s", (detail.empty() ? shortcut(a) : detail).c_str());
-  ImGui::TextDisabled("%s / [%s] %s", a.file.c_str(), a.section.c_str(), a.key.c_str());
+  ImGui::TextDisabled("%s / [%s] %s", displayText(a.file).c_str(),
+                      displayText(a.section).c_str(), displayText(a.key).c_str());
   if (!a.description.empty()) {
     ImGui::Separator();
     ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 360 * scale);

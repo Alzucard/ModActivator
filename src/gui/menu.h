@@ -9,14 +9,17 @@ namespace ml::gui
     // retired, since the backend releases the font texture to do it.
     bool FontsNeedRebuild();
     void RebuildFonts();
+    // The height of the target the menu is drawn into, each frame. A height
+    // that implies another UI scale schedules a rebuild through the two above.
+    void SetDisplayHeight(float height);
     // Polled every frame from the render hook: menu key edge, Escape to close.
     void PollToggle();
-    // Whether anything needs drawing this frame (menu or HUD).
+    // Whether the menu needs drawing this frame.
     bool WantsDraw();
-    // Hands ImGui the menu's own cursor and the capture state that goes with
-    // it. Call between ImGui_ImplWin32_NewFrame and ImGui::NewFrame, never
-    // later: see the note on the definition for what happens when it is.
+    // Hands ImGui the menu's own cursor and the input queued since the last
+    // frame. Call between ImGui_ImplWin32_NewFrame and ImGui::NewFrame: later,
+    // and the Win32 backend's own cursor poll overrides the virtual cursor.
     void FeedInput();
-    // Draws the HUD line and, when open, the menu.
+    // Draws the menu.
     void Render();
 }

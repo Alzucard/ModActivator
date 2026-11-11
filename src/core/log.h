@@ -1,20 +1,10 @@
 #pragma once
-#include <string>
-#include <vector>
 
 namespace ml::Log
 {
-    // printf-style. Lines are buffered until Claim(); after that they go to
-    // MasterLooter.log next to the plugin. A copy of recent lines is always kept
-    // for the Status tab.
+    // printf-style, to ModActivator.log next to the plugin. Defined in
+    // activator.cpp; nothing is written until the log is opened at startup.
     void Write(const char* level, const char* fmt, ...);
-    // The same, but gives up rather than wait when another thread holds the
-    // log. For the crash path, where the holder may be the thread that died.
-    bool TryWrite(const char* level, const char* fmt, ...);
-    void Claim();
-    bool Claimed();
-    void Shutdown();
-    void Snapshot(std::vector<std::string>& out, int maxLines);
 }
 
 #define LOG(...)     ::ml::Log::Write("info ", __VA_ARGS__)

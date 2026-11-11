@@ -23,7 +23,6 @@ namespace ml::input
     static CRITICAL_SECTION g_cs;
     static bool  g_csReady = false;
     static float g_vx = 0, g_vy = 0;         // client coordinates
-    static bool  g_centered = false;
     static bool  g_rawButtons = false;       // the game asked for no legacy button messages
     enum class InputKind { Key, Character, MouseButton, Wheel, Focus };
     struct PendingInput
@@ -359,7 +358,6 @@ namespace ml::input
         g_vx = w * 0.5f; g_vy = h * 0.5f;
         ResetInputLocked(true);
         Unlock();
-        g_centered = true;
         // Upstream cursor diagnostics, about nine lines per opening. Only
         // written when asked for with DebugInput=1 (issue #5).
         if (Settings::Get().debugInput)
@@ -504,11 +502,11 @@ namespace ml::input
             if (IsKeyboard(msg))
             {
                 if (static_cast<ULONG_PTR>(GetMessageExtraInfo()) == shortcutInputTag)
-                    return CallWindowProc(g_original, hwnd, msg, wParam, lParam);
+                    return CallWindowProcW(g_original, hwnd, msg, wParam, lParam);
                 QueueKeyboard(hwnd, msg, wParam, lParam);
                 // Releases reach the game so a key held when the menu opened does not stick.
                 if (msg == WM_KEYUP || msg == WM_SYSKEYUP)
-                    return CallWindowProc(g_original, hwnd, msg, wParam, lParam);
+                    return CallWindowProcW(g_original, hwnd, msg, wParam, lParam);
                 return 0;
             }
         }
@@ -517,7 +515,7 @@ namespace ml::input
             // Our own registration: the game did not ask for these, so do not hand them over.
             return DefWindowProcW(hwnd, msg, wParam, lParam);
         }
-        return CallWindowProc(g_original, hwnd, msg, wParam, lParam);
+        return CallWindowProcW(g_original, hwnd, msg, wParam, lParam);
     }
 
     void Init(HWND hwnd)
@@ -526,7 +524,14 @@ namespace ml::input
         if (!g_csReady) { InitializeCriticalSection(&g_cs); g_csReady = true; }
         g_hwnd = hwnd;
         g_ours = &WndProc;
-        g_original = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(WndProc)));
+        // The window thread can call WndProc the moment the subclass lands,
+        // before SetWindowLongPtrW has even returned, so the original must be
+        // known first. It is read, published, and then confirmed against what
+        // the swap actually replaced, in case something subclassed in between.
+        g_original = reinterpret_cast<WNDPROC>(GetWindowLongPtrW(hwnd, GWLP_WNDPROC));
+        const auto replaced = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(WndProc)));
+        if (replaced && replaced != g_original)
+            g_original = replaced;
         EnsureRawInput();
         if (HMODULE user32 = GetModuleHandleW(L"user32.dll"))
         {
@@ -538,16 +543,7 @@ namespace ml::input
         }
     }
 
-    void Shutdown()
-    {
-        if (g_original && g_hwnd)
-        {
-            SetWindowLongPtrW(g_hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(g_original));
-            g_original = nullptr;
-            g_hwnd = nullptr;
-        }
-    }
-
+#ifdef MODACTIVATOR_TESTS // see the test entry points in activator.cpp
     extern "C" __declspec(dllexport) int ModActivatorInputQueueTest()
     {
         if (g_csReady)
@@ -620,4 +616,5 @@ namespace ml::input
         g_dbgLines = 0;
         return result;
     }
+#endif // MODACTIVATOR_TESTS
 }

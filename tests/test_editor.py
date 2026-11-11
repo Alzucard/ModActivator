@@ -1,6 +1,6 @@
-import pathlib,ctypes
-p=pathlib.Path('build/editor-tests').resolve();p.mkdir(exist_ok=True)
-m=ctypes.WinDLL(str(pathlib.Path('dist/ModActivator.asi').resolve()));assert m.ModActivatorConflictTest()==0
+import pathlib,ctypes,shutil
+p=pathlib.Path('build/editor-tests').resolve();shutil.rmtree(p,ignore_errors=True);p.mkdir(parents=True)
+m=ctypes.WinDLL(str(pathlib.Path('build/ModActivator-tests.asi').resolve()));assert m.ModActivatorConflictTest()==0
 fn=m.ModActivatorEditorTest;fn.argtypes=[ctypes.c_char_p]*7+[ctypes.c_int]
 def edit(name,data,sec,key,new,expected=None):
  path=p/name;path.write_bytes(data);b=ctypes.create_string_buffer(1000);r=fn((str(p)+'\\').encode(),name.encode(),sec.encode(),key.encode(),new.encode(),data if expected is None else expected,b,len(b));return r,b.value.decode(),path.read_bytes()
@@ -49,3 +49,11 @@ with TemporaryDirectory(dir=p) as tmp:
     assert result == 0 and config.read_bytes() == contents
     assert not config.with_suffix('.ini.modactivator.bak').exists()
 print('PASS: inline comment and controller suffix preservation, no-op edits.')
+
+# A temporary file left by a save that died part way must not block saving.
+stale = b'[Menu]\nHotkey=F8\n'
+(p / 'Stale2.ini.modactivator.tmp').write_bytes(b'half a file')
+r, msg, out = edit('Stale2.ini', stale, 'Menu', 'Hotkey', 'F7')
+assert not r and out == stale.replace(b'F8', b'F7'), (r, msg, out)
+assert not (p / 'Stale2.ini.modactivator.tmp').exists()
+print('PASS: a leftover temporary file from an interrupted save is replaced.')
