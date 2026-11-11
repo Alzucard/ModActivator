@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.2.3.1
+## 1.2.31
 - Queue Windows input for the render thread to prevent a crash when typing or pressing hotkeys in the overlay.
 - Preserve event order for keyboard, text, mouse buttons, and wheel input.
 
