@@ -1191,29 +1191,76 @@ namespace ml::hooks
         CreateOffscreenTarget(g_scWidth, g_scHeight);
     }
 
-    static void OnReShadePresent(reshade_api::DeviceObject *queue,
-                                 reshade_api::DeviceObject *swapChain,
+    // Restrict drawing to the actual game window, including when other
+    // D3D12 windows are being presented by other add-ons.
+    static bool IsGameWindow(HWND window)
+    {
+        return window && (window == g_hwnd ||
+                          GetAncestor(window, GA_ROOT) == GetForegroundWindow());
+    }
+
+    // ReShade's "present" event. It fires before ReShade renders its effects,
+    // so nothing is drawn here (issue #3). It is the one place on the ReShade
+    // path that sees the api::swapchain, and with it the colour space the game
+    // set: there is no SetColorSpace1 detour or swapchain wrapper on this path
+    // to report it, so without this the menu was composited as SDR into HDR
+    // back buffers (issue #2).
+    static void OnReShadePresent(reshade_api::DeviceObject *,
+                                 reshade_api::Swapchain *swapChain,
                                  const RECT *, const RECT *, uint32_t, const RECT *)
     {
-        if (!queue || !swapChain)
+        if (!swapChain)
             return;
-        const auto *device = queue->get_device();
+        const auto *device = swapChain->get_device();
         if (!device || device->get_api() != reshade_api::d3d12)
             return;
+        if (!IsGameWindow(static_cast<HWND>(swapChain->get_hwnd())))
+            return;
+        switch (swapChain->get_color_space())
+        {
+            case reshade_api::colorSpaceSrgb:
+                OnColorSpaceChanged(DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
+                break;
+            case reshade_api::colorSpaceScrgb:
+                OnColorSpaceChanged(DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709);
+                break;
+            case reshade_api::colorSpaceHdr10Pq:
+                OnColorSpaceChanged(DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020);
+                break;
+            default:
+                // Unknown, or HLG, which the composite pass has no mode for.
+                break;
+        }
+    }
+
+    // ReShade's "reshade_present" event: "Called after ReShade has rendered
+    // its overlay", so the menu goes on top of the effects and ReShade's own
+    // overlay rather than under them.
+    static void OnReShadeEffectsPresent(reshade_api::EffectRuntime *runtime)
+    {
+        if (!runtime)
+            return;
+        const auto *device = runtime->get_device();
+        if (!device || device->get_api() != reshade_api::d3d12)
+            return;
+        reshade_api::CommandQueue *queue = runtime->get_command_queue();
+        if (!queue)
+            return;
         auto *nativeQueue = reinterpret_cast<ID3D12CommandQueue *>(queue->get_native());
-        auto *nativeSwapChain = reinterpret_cast<IDXGISwapChain *>(swapChain->get_native());
+        auto *nativeSwapChain = reinterpret_cast<IDXGISwapChain *>(runtime->get_native());
         IDXGISwapChain3 *chain = nullptr;
         if (!nativeQueue || !nativeSwapChain ||
             FAILED(nativeSwapChain->QueryInterface(IID_PPV_ARGS(&chain))))
             return;
 
-        // Restrict drawing to the actual game window, including when other
-        // D3D12 windows are being presented by other add-ons.
         DXGI_SWAP_CHAIN_DESC desc = {};
-        if (SUCCEEDED(chain->GetDesc(&desc)) && desc.OutputWindow &&
-            (desc.OutputWindow == g_hwnd ||
-             GetAncestor(desc.OutputWindow, GA_ROOT) == GetForegroundWindow()))
+        if (SUCCEEDED(chain->GetDesc(&desc)) && IsGameWindow(desc.OutputWindow))
         {
+            // On D3D12 ReShade records its effects and overlay into the
+            // queue's immediate command list and only submits it after this
+            // event returns. Submit it now, or the menu would still execute
+            // on the GPU before the effects.
+            queue->flush_immediate_command_list();
             const bool drew = RenderOverlay(chain, true, 0, nativeQueue);
             PostPresentDeviceCheck(drew);
         }
@@ -2595,16 +2642,23 @@ namespace ml::hooks
                 GetProcAddress(reshade, "ReShadeRegisterAddon"));
             const auto registerEvent = reinterpret_cast<reshade_api::RegisterEvent>(
                 GetProcAddress(reshade, "ReShadeRegisterEventForAddon"));
-            if (!registerEvent || !registerAddon(self, reshade_api::version))
+            if (registerAddon && registerEvent && registerAddon(self, reshade_api::version))
             {
-                LOG_ERR("ReShade add-on API registration failed. DirectX hook stacking was skipped.");
-                return false;
+                registerEvent(self, reshade_api::destroySwapchain,
+                              reinterpret_cast<void*>(&OnReShadeDestroySwapChain));
+                registerEvent(self, reshade_api::present, reinterpret_cast<void*>(&OnReShadePresent));
+                registerEvent(self, reshade_api::reshadePresent,
+                              reinterpret_cast<void*>(&OnReShadeEffectsPresent));
+                LOG("Using ReShade presentation callbacks. No DXGI hooks installed.");
+                return true;
             }
-            registerEvent(self, reshade_api::destroySwapchain,
-                          reinterpret_cast<void*>(&OnReShadeDestroySwapChain));
-            registerEvent(self, reshade_api::present, reinterpret_cast<void*>(&OnReShadePresent));
-            LOG("Using ReShade presentation callbacks. No DXGI hooks installed.");
-            return true;
+            // ReShade before 6.8.0 has an older add-on API and refuses this add-on,
+            // and some builds lack the event export. Either way the legacy
+            // path below still works and stacks on ReShade's dxgi.dll proxy,
+            // so fall through rather than leave the menu dead (issue #1).
+            LOG_ERR("ReShade add-on API v%u registration failed (ReShade 6.8.0 or newer is needed for it). "
+                    "Using the legacy DirectX path instead. Set UseReShadeEvents=0 to skip this attempt.",
+                    reshade_api::version);
         }
 
         // DLSS-G / Frame Generation: patch the factory's CreateSwapChainForHwnd

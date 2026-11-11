@@ -173,6 +173,8 @@ static char search[128] = "";
 static const ImVec4 gold{0.84f, 0.69f, 0.43f, 1.0f},
     muted{0.57f, 0.59f, 0.62f, 1.0f};
 static std::string name(const Action &a) {
+  if (isReShadeName(a.module))
+    return "ReShade";
   std::string raw = std::filesystem::path(a.module).stem().string(), out;
   for (size_t i = 0; i < raw.size(); ++i) {
     unsigned char c = raw[i];

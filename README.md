@@ -1,4 +1,4 @@
-# ModActivator 1.2.31
+# ModActivator 1.2.3.1
 
 An in-game mod menu and hotkey manager for Crimson Desert.
 
@@ -21,7 +21,9 @@ Close Crimson Desert. Copy `ModActivator.asi` and `ModActivator.ini` into the ga
 
 Launch the game and press **Ctrl+Shift+Backspace**. Keep your existing INI when updating.
 
-When ReShade supports the add-on API, ModActivator uses its presentation callbacks. Set `UseReShadeEvents=0` under `[General]` to select the legacy DirectX path. On the legacy path, try `WrapSwapChain=1` if the overlay is invisible with frame generation.
+With ReShade 6.8.0 or newer, ModActivator draws through ReShade's add-on callbacks, after ReShade's effects and overlay. With an older ReShade it falls back to the legacy DirectX path automatically. Set `UseReShadeEvents=0` under `[General]` to always use the legacy path. On the legacy path, try `WrapSwapChain=1` if the overlay is invisible with frame generation.
+
+`ModActivator.log` is started fresh each launch, and the previous one is kept as `ModActivator.log.old`. Set `DebugInput=1` to add cursor and raw input diagnostics each time the menu opens.
 
 ## Binding types
 

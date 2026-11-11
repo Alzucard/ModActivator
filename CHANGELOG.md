@@ -1,6 +1,16 @@
 # Changelog
 
-## 1.2.31
+## Unreleased
+- Fall back to the legacy DirectX path when ReShade is older than 6.8.0 or lacks the add-on event export, instead of never starting (#1).
+- Read the swap chain's colour space from ReShade, so the menu is composited correctly in HDR on the ReShade path (#2).
+- Draw the menu after ReShade's effects and overlay rather than under them (#3).
+- Detect ReShade by its add-on export rather than by any loaded `dxgi.dll`, hide a leftover `ReShade.ini` when ReShade is not loaded, and title its card "ReShade" (#4).
+- Start a fresh `ModActivator.log` each launch, keeping the previous one as `ModActivator.log.old`, add timestamps, and only write per-open cursor diagnostics with `DebugInput=1` (#5).
+- Add `UseReShadeEvents` and `DebugInput` to the shipped `ModActivator.ini`.
+- Name the previous release 1.2.3.1, matching the earlier hotfixes, so later versions sort above it (#6).
+- Add the HLSL sources of the precompiled ImGui and HDR composite shaders under `shaders/` (#7).
+
+## 1.2.3.1
 - Queue Windows input for the render thread to prevent a crash when typing or pressing hotkeys in the overlay.
 - Preserve event order for keyboard, text, mouse buttons, and wheel input.
 

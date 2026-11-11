@@ -255,17 +255,34 @@ static std::vector<int> keysFrom(const Action &a, std::string s,
   return out;
 }
 namespace ml::Log {
+// One file handle for the whole run, opened by Begin() once the plugin folder
+// is known. Lines are flushed as written so nothing is lost if the game dies.
+static std::mutex logMutex;
+static FILE *logFile = nullptr;
+// Starts a fresh log each launch and keeps the previous one as
+// ModActivator.log.old, so the file no longer grows forever (issue #5).
+static void Begin() {
+  std::lock_guard<std::mutex> lock(logMutex);
+  if (logFile)
+    return;
+  const auto path = folder + "ModActivator.log";
+  MoveFileExA(path.c_str(), (path + ".old").c_str(), MOVEFILE_REPLACE_EXISTING);
+  logFile = fopen(path.c_str(), "w");
+}
 void Write(const char *level, const char *fmt, ...) {
   char b[2048];
   va_list a;
   va_start(a, fmt);
   vsnprintf(b, sizeof b, fmt, a);
   va_end(a);
-  FILE *f = fopen((folder + "ModActivator.log").c_str(), "a");
-  if (f) {
-    fprintf(f, "[%s] %s\n", level, b);
-    fclose(f);
-  }
+  SYSTEMTIME t;
+  GetLocalTime(&t);
+  std::lock_guard<std::mutex> lock(logMutex);
+  if (!logFile)
+    return;
+  fprintf(logFile, "%02u:%02u:%02u.%03u [%s] %s\n", t.wHour, t.wMinute,
+          t.wSecond, t.wMilliseconds, level, b);
+  fflush(logFile);
 }
 } // namespace ml::Log
 #include "discovery.h"
@@ -678,6 +695,9 @@ static DWORD WINAPI start(void *arg) {
       GetPrivateProfileIntA("General", "WrapSwapChain", 0, config.c_str()) != 0;
   ml::Settings::Get().enableDred =
       GetPrivateProfileIntA("General", "EnableDred", 0, config.c_str()) != 0;
+  ml::Settings::Get().debugInput =
+      GetPrivateProfileIntA("General", "DebugInput", 0, config.c_str()) != 0;
+  ml::Log::Begin();
   LOG("Mod Activator " MODACTIVATOR_VERSION " started.");
   if (MH_Initialize() != MH_OK)
     return 0;

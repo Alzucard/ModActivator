@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "../core/log.h"
+#include "../core/settings.h"
 #include "../core/state.h"
 
 // This backend helper only translates the message. It does not access ImGui state.
@@ -52,7 +53,7 @@ namespace ml::input
     static volatile LONG g_dbgMove   = 0;   // legacy WM_MOUSEMOVE seen
     static volatile LONG g_dbgButton = 0;   // legacy button and wheel messages
     static bool    g_gcpHooked = false;
-    static int     g_dbgLines  = 0;         // per-second lines used this opening
+    static int     g_dbgLines  = 3;         // per-second lines used this opening
     static DWORD   g_dbgNext   = 0;
     static WNDPROC g_ours      = nullptr;
 
@@ -359,7 +360,10 @@ namespace ml::input
         ResetInputLocked(true);
         Unlock();
         g_centered = true;
-        ReportOnOpen(w, h);
+        // Upstream cursor diagnostics, about nine lines per opening. Only
+        // written when asked for with DebugInput=1 (issue #5).
+        if (Settings::Get().debugInput)
+            ReportOnOpen(w, h);
     }
     void MenuClosed()
     {

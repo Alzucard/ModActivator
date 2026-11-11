@@ -200,19 +200,34 @@ static void classifyBinding(Action &action, const BindingComments &comments) {
   }
 }
 
+// ReShade is identified by its add-on export, not by its file name: it can be
+// installed as dxgi.dll, d3d12.dll, ReShade64.dll or anything else, and the
+// system dxgi.dll is loaded in every D3D12 game whether ReShade is or not.
+static bool isReShadeModule(HMODULE module) {
+  return module && GetProcAddress(module, "ReShadeRegisterAddon");
+}
+// The module refresh() last identified as ReShade, lower case. Read by the
+// menu for card titles, so it is guarded by its own lock.
+static std::mutex reshadeModuleMutex;
+static std::string reshadeModuleName;
+static bool isReShadeName(const std::string &module) {
+  std::lock_guard<std::mutex> lock(reshadeModuleMutex);
+  return !reshadeModuleName.empty() && lower(module) == reshadeModuleName;
+}
 static std::string moduleFor(const std::filesystem::path &rel,
-                             const std::vector<std::string> &mods) {
+                             const std::vector<std::string> &mods,
+                             const std::string &reshade) {
   auto stem = lower(rel.stem().string());
   for (auto &m : mods) {
     auto ms = lower(std::filesystem::path(m).stem().string());
     if (stem == ms)
       return m;
   }
-  if (lower(rel.filename().string()) == "reshade.ini") {
-    for (auto &m : mods)
-      if (lower(m) == "dxgi.dll")
-        return m;
-  }
+  // ReShade.ini belongs to ReShade only while ReShade is actually loaded.
+  // A leftover file must not produce a card whose button sends keys to
+  // nothing.
+  if (lower(rel.filename().string()) == "reshade.ini")
+    return reshade;
   for (auto &m : mods) {
     auto ms = lower(std::filesystem::path(m).stem().string());
     for (const auto &part : rel.parent_path())
@@ -221,7 +236,8 @@ static std::string moduleFor(const std::filesystem::path &rel,
   }
   return {};
 }
-static std::vector<Action> scanBindings(const std::vector<std::string> &mods) {
+static std::vector<Action> scanBindings(const std::vector<std::string> &mods,
+                                        const std::string &reshade = {}) {
   const auto layout = gameKeyboardLayout();
   std::vector<Action> found;
   std::error_code ec;
@@ -248,7 +264,7 @@ static std::vector<Action> scanBindings(const std::vector<std::string> &mods) {
       continue;
     ++files;
     auto rel = it->path().lexically_relative(std::filesystem::path(folder));
-    auto module = moduleFor(rel, mods);
+    auto module = moduleFor(rel, mods, reshade);
     if (module.empty() || lower(module) == "modactivator.asi")
       continue;
     auto file = rel.generic_string();
@@ -277,8 +293,10 @@ static std::vector<Action> scanBindings(const std::vector<std::string> &mods) {
         if (GetPrivateProfileIntA(sec, "RequireWin", 0,
                                   it->path().string().c_str()))
           continue;
-        Action a{std::filesystem::path(module).stem().string() + " - " + sec +
-                     " / " + field,
+        const bool fromReShade = !reshade.empty() && lower(module) == lower(reshade);
+        Action a{(fromReShade ? std::string("ReShade")
+                              : std::filesystem::path(module).stem().string()) +
+                     " - " + sec + " / " + field,
                  module,
                  file,
                  sec,
@@ -327,6 +345,7 @@ static std::vector<Action> selectActions(const std::vector<Action> &bindings,
 }
 static void refresh() {
   std::vector<std::string> mods;
+  std::string reshade;
   HANDLE h = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, GetCurrentProcessId());
   if (h == INVALID_HANDLE_VALUE)
     return;
@@ -335,14 +354,21 @@ static void refresh() {
   if (Module32First(h, &e))
     do {
       auto n = lower(e.szModule);
-      if (n.size() > 4 && (n.substr(n.size() - 4) == ".asi" ||
-                           std::filesystem::path(n).extension() == ".addon64" ||
-                           n == "dxgi.dll"))
+      if (reshade.empty() && isReShadeModule(e.hModule)) {
+        reshade = e.szModule;
+        mods.emplace_back(e.szModule);
+      } else if (n.size() > 4 &&
+                 (n.substr(n.size() - 4) == ".asi" ||
+                  std::filesystem::path(n).extension() == ".addon64"))
         mods.emplace_back(e.szModule);
     } while (Module32Next(h, &e));
   CloseHandle(h);
+  {
+    std::lock_guard<std::mutex> lock(reshadeModuleMutex);
+    reshadeModuleName = lower(reshade);
+  }
   try {
-    auto all = scanBindings(mods);
+    auto all = scanBindings(mods, reshade);
     auto found = selectActions(all);
     auto toggles = selectActions(all, true);
     for (auto &a : toggles)

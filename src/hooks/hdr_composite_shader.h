@@ -11,10 +11,11 @@
 //
 // Shipped precompiled (rather than compiled at runtime via d3dcompiler_47.dll)
 // to avoid a runtime dependency on that DLL. Source lives at
-// tools/shaders/hdr_composite.hlsl; regenerate with the Windows SDK's fxc.exe:
+// shaders/hdr_composite.hlsl; regenerate from the repository root with the
+// Windows SDK's fxc.exe:
 //
-//   fxc /T vs_5_0 /E VSMain /Fh hdr_composite_vs.h /Vn g_hdrCompositeVS hdr_composite.hlsl
-//   fxc /T ps_5_0 /E PSMain /Fh hdr_composite_ps.h /Vn g_hdrCompositePS hdr_composite.hlsl
+//   fxc /T vs_5_0 /E VSMain /Fh hdr_composite_vs.h /Vn g_hdrCompositeVS shaders/hdr_composite.hlsl
+//   fxc /T ps_5_0 /E PSMain /Fh hdr_composite_ps.h /Vn g_hdrCompositePS shaders/hdr_composite.hlsl
 //
 // then paste the two `const BYTE ...[] = { ... };` arrays back in below.
 

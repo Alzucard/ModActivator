@@ -1,15 +1,15 @@
 // Precompiled DXBC for Dear ImGui's DirectX 12 backend, in place of the
 // D3DCompile() call the stock backend makes on first draw. Compiled from
-// mod/shaders/imgui_vs.hlsl and imgui_ps.hlsl with the Windows SDK's
+// shaders/imgui_vs.hlsl and shaders/imgui_ps.hlsl with the Windows SDK's
 // fxc.exe (vs_5_0 and ps_5_0, entry point main), the shaders being the
 // backend's own, verbatim. Shipped this way so the plugin imports no
 // d3dcompiler_47.dll at all: under Proton that DLL is Wine's own
 // reimplementation, and the overlay dies on the first frame there
 // (issue #15), while the HDR composite pass has been precompiled since
-// it was written. Regenerate with:
+// it was written. Regenerate from the repository root with:
 //
-//   fxc /T vs_5_0 /E main /O3 /Fh imgui_vs.fxc.h /Vn g_imguiVS imgui_vs.hlsl
-//   fxc /T ps_5_0 /E main /O3 /Fh imgui_ps.fxc.h /Vn g_imguiPS imgui_ps.hlsl
+//   fxc /T vs_5_0 /E main /O3 /Fh imgui_vs.fxc.h /Vn g_imguiVS shaders/imgui_vs.hlsl
+//   fxc /T ps_5_0 /E main /O3 /Fh imgui_ps.fxc.h /Vn g_imguiPS shaders/imgui_ps.hlsl
 #pragma once
 #include <Windows.h>
 const BYTE g_imguiVS[] =

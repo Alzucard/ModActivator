@@ -25,6 +25,15 @@ fn=m.ModActivatorToggleDiscoveryTest;fn.argtypes=[ctypes.c_char_p,ctypes.c_char_
 r=scan(root,'ToggleOnly.asi;Nested.asi');assert len(r.strip().splitlines())==1 and '|HotkeyToggleEffect|121,' in r
 print('PASS: UI discovery, one UI per mod, no fallback, unloaded filtering, nested configs, modifiers, late mods and toggle discovery.')
 
+# The system dxgi.dll is loaded in every D3D12 game. A leftover ReShade.ini
+# must not be attributed to it when ReShade itself is not loaded (issue #4).
+fn=m.ModActivatorDiscoveryTest
+(root/'ReShade.ini').write_text('[INPUT]\nKeyOverlay=36,0,0,0\n')
+assert 'ReShade.ini' not in scan(root,'dxgi.dll;NewUI.asi')
+(root/'ReShade.ini').unlink()
+fn=m.ModActivatorToggleDiscoveryTest
+print('PASS: a leftover ReShade.ini without ReShade loaded is not listed.')
+
 # A field called ToggleKey can open a UI. A comment attached to a different
 # setting must not affect its classification.
 (root/'WikiFixture.ini').write_text('[Wiki]\n; Keyboard key to open/close the wiki\nToggleKey=F7\n')
