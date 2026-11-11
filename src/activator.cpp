@@ -46,7 +46,8 @@ static std::string read(const Action &a) {
 }
 static bool held(int k) { return (GetAsyncKeyState(k) & 0x8000) != 0; }
 #include "shortcut_keys.h"
-static int vk(std::string s, HKL layout = gameKeyboardLayout()) {
+static int vk(std::string s, HKL layout = gameKeyboardLayout(),
+              unsigned *physicalScan = nullptr, bool namedDigit = false) {
   s.erase(std::remove_if(s.begin(), s.end(),
                          [](unsigned char c) { return c == ' '; }),
           s.end());
@@ -60,8 +61,6 @@ static int vk(std::string s, HKL layout = gameKeyboardLayout()) {
     return 16;
   if (s == "ALT")
     return 18;
-  if (s == "GRAVE")
-    return punctuationVk(0x29, layout);
   if (s == "HOME")
     return 36;
   if (s == "END")
@@ -107,21 +106,19 @@ static int vk(std::string s, HKL layout = gameKeyboardLayout()) {
     long n = strtol(s.c_str() + 1, &end, 10);
     return end && !*end && n >= 1 && n <= 24 ? 111 + (int)n : 0;
   }
-  if (isdigit(s[0])) {
+  if (isdigit((unsigned char)s[0]) && !(namedDigit && s.size() == 1)) {
     char *end = nullptr;
     long v = strtol(s.c_str(), &end, s.size() > 2 && s[1] == 'X' ? 16 : 10);
     return end && !*end && v >= 0 && v <= 255 ? (int)v : 0;
   }
-  if (s.size() == 1) {
-    for (const auto &key : punctuation)
-      if (s[0] == key.symbol)
-        return punctuationVk(key.scan, layout);
-    if (s[0] == '+')
-      return punctuationVk(0x0D, layout);
-    if (s[0] >= 'A' && s[0] <= 'Z')
-      return s[0];
-  }
-  return 0;
+  const unsigned scan = s == "GRAVE" ? 0x29 :
+                        s.size() == 1 && (unsigned char)s[0] < 128
+                            ? scanForUsSymbol(s[0])
+                            : scanForLocalizedSymbol(s, layout);
+  const int key = scan ? vkForScan(scan, layout) : 0;
+  if (physicalScan)
+    *physicalScan = scan;
+  return key;
 }
 static bool validShortcut(const std::vector<int> &ks) {
   if (ks.empty() || ks.size() > 4)
@@ -137,7 +134,10 @@ static bool validShortcut(const std::vector<int> &ks) {
   }
   return true;
 }
-static std::vector<int> parseShortcut(std::string s) {
+static std::vector<int> parseShortcut(std::string s,
+                                      HKL layout = gameKeyboardLayout(),
+                                      unsigned *mainScan = nullptr,
+                                      bool namedDigit = false) {
   s.erase(std::remove_if(s.begin(), s.end(),
                          [](unsigned char c) { return c == ' ' || c == 9; }),
           s.end());
@@ -147,9 +147,8 @@ static std::vector<int> parseShortcut(std::string s) {
     // A final literal plus can also be the main key (for example Ctrl++).
     size_t end = pos + 1 == s.size() && s[pos] == '+' ? s.npos : s.find('+', pos);
     auto token = s.substr(pos, end == s.npos ? end : end - pos);
-    out.push_back(pos != 0 && token.size() == 1 && isdigit(token[0])
-                      ? token[0]
-                      : vk(token));
+    out.push_back(vk(token, layout, end == s.npos ? mainScan : nullptr,
+                     pos != 0 || namedDigit));
     if (end == s.npos)
       return out;
     pos = end + 1;
@@ -188,12 +187,33 @@ static unsigned heldModifiers() {
          (held(VK_SHIFT) ? 1u << 9 : 0) |
          (held(VK_MENU) ? 1u << 10 : 0);
 }
-static std::vector<int> keysFrom(const Action &a, std::string s) {
+static size_t bindingComment(const std::string &s, size_t start = 0) {
+  auto semi = s.find(';', start);
+  if (semi == s.npos)
+    return semi;
+  const auto previous = s.find_last_not_of(" \t", semi ? semi - 1 : 0);
+  const auto after = s.find_first_not_of(" \t\r", semi + 1);
+  const bool mainKey = semi == start || previous == s.npos ||
+                       previous < start || s[previous] == '+';
+  if (mainKey && (after == s.npos || s[after] == ';' || s[after] == '|'))
+    return s.find(';', semi + 1);
+  return semi;
+}
+static bool standaloneDigit(const Action &a, const std::string &s) {
+  const auto n = a.key.size();
+  const bool explicitVk = (n >= 2 && !_stricmp(a.key.c_str() + n - 2, "VK")) ||
+                          (n >= 7 && !_stricmp(a.key.c_str() + n - 7, "KeyCode"));
+  // A standalone zero is commonly used to disable a shortcut.
+  return !explicitVk && s.size() == 1 && s[0] >= '1' && s[0] <= '9';
+}
+static std::vector<int> keysFrom(const Action &a, std::string s,
+                                 HKL layout = gameKeyboardLayout(),
+                                 unsigned *mainScan = nullptr) {
   configReads += 3;
   s.erase(std::remove_if(s.begin(), s.end(),
                          [](unsigned char c) { return c == ' ' || c == '\t'; }),
           s.end());
-  auto comment = s.find(';');
+  auto comment = bindingComment(s);
   if (comment != std::string::npos)
     s.resize(comment);
   s = s.substr(0, s.find('|'));
@@ -219,7 +239,7 @@ static std::vector<int> keysFrom(const Action &a, std::string s) {
     out.push_back(k);
     return out;
   }
-  auto named = parseShortcut(s);
+  auto named = parseShortcut(s, layout, mainScan, standaloneDigit(a, s));
   out.insert(out.end(), named.begin(), named.end());
   return out;
 }
@@ -241,21 +261,18 @@ void Write(const char *level, const char *fmt, ...) {
 #include "discovery.h"
 #include "hotkey_editor.h"
 #include "mod_layout.h"
-static bool key(int k, bool up, HKL layout) {
+static bool key(int k, bool up, unsigned scan) {
   INPUT i{};
   i.type = INPUT_KEYBOARD;
   i.ki.dwExtraInfo = 0x4D414354;
   i.ki.wVk = (WORD)k;
   i.ki.dwFlags = up ? KEYEVENTF_KEYUP : 0;
-  if (isOemKey(k)) {
-    const auto scan = MapVirtualKeyExW(k, MAPVK_VK_TO_VSC_EX, layout);
-    if (scan) {
-      i.ki.wVk = 0;
-      i.ki.wScan = (WORD)(scan & 0xff);
-      i.ki.dwFlags |= KEYEVENTF_SCANCODE;
-      if ((scan & 0xff00) == 0xe000)
-        i.ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
-    }
+  if (scan) {
+    i.ki.wVk = 0;
+    i.ki.wScan = (WORD)(scan & 0xff);
+    i.ki.dwFlags |= KEYEVENTF_SCANCODE;
+    if ((scan & 0xff00) == 0xe000)
+      i.ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
   } else if (k >= 33 && k <= 46) {
     i.ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
   }
@@ -285,7 +302,9 @@ static DWORD WINAPI dispatch(void *) {
       if (restart)
         continue;
       Sleep(220);
-      auto ks = keys(a);
+      const auto layout = gameKeyboardLayout();
+      unsigned mainScan = 0;
+      auto ks = keysFrom(a, read(a), layout, &mainScan);
       bool valid = validShortcut(ks) && GetModuleHandleA(a.module.c_str());
       for (int k : ks)
         if (k < 1 || k > 255)
@@ -296,17 +315,19 @@ static DWORD WINAPI dispatch(void *) {
       if (valid && ml::State::ForegroundIsOurs() && !held(16) && !held(17) &&
           !held(18) && !held(1)) {
         ml::State::Get().keyboardPassthrough.store(a.toggle);
-        const auto layout = gameKeyboardLayout();
         size_t pressed = 0;
         for (int k : ks) {
-          if (!ml::State::ForegroundIsOurs() || !key(k, false, layout))
+          const auto scan = pressed + 1 == ks.size() ? mainScan : 0;
+          if (!ml::State::ForegroundIsOurs() || !key(k, false, scan))
             break;
           ++pressed;
         }
         bool complete = pressed == ks.size();
         Sleep(130);
-        while (pressed)
-          key(ks[--pressed], true, layout);
+        while (pressed) {
+          const auto scan = pressed == ks.size() ? mainScan : 0;
+          key(ks[--pressed], true, scan);
+        }
         ml::State::Get().keyboardPassthrough.store(false);
         if (complete)
           LOG("Shortcut dispatched: %s", a.label.c_str());
@@ -663,17 +684,37 @@ ModActivatorSettingsTest(const char *root) {
     const int count = GetKeyboardLayoutList(0, nullptr);
     std::vector<HKL> layouts(count);
     GetKeyboardLayoutList(count, layouts.data());
-    for (auto layout : layouts)
-      if (LOWORD(reinterpret_cast<ULONG_PTR>(layout)) == 0x0407) {
+    Action probe{"Keyboard", "Keyboard.asi", "absent.ini", "Menu", "Hotkey"};
+    const std::string umlaut = "\xc3\xb6";
+    if (usSymbolForScan(scanForLocalizedSymbol(umlaut, gameKeyboardLayout())) != ';' ||
+        usSymbolForScan(scanForUsSymbol(';')) != ';' ||
+        usSymbolForScan(scanForUsSymbol(':')) != ';')
+      return 1;
+    for (auto layout : layouts) {
+      const auto language = LOWORD(reinterpret_cast<ULONG_PTR>(layout));
+      unsigned scan = 0;
+      if (language == 0x0407) {
         const auto key = vk("]", layout);
-        if (key != VK_OEM_PLUS || localizedKey(key, layout) != "+")
+        const auto semicolon = keysFrom(probe, "Ctrl+; ; note", layout, &scan);
+        if (key != VK_OEM_PLUS || localizedKey(key, layout) != "+" ||
+            vk("Y", layout) != 'Z' || vk("Z", layout) != 'Y' ||
+            vk("0x59", layout) != 'Y' || scan != 0x27 ||
+            semicolon.size() != 2 || localizedKey(semicolon.back(), layout) != "\xc3\x96" ||
+            keysFrom(probe, umlaut, layout) != std::vector<int>{semicolon.back()} ||
+            keysFrom(probe, "Ctrl+7", layout) != std::vector<int>{VK_CONTROL, '7'})
           return 1;
       }
+      if (language == 0x0409 && vk(umlaut, layout) != VK_OEM_1)
+        return 1;
+    }
 
     Action first{"First", "First.asi", "First.ini", "Menu", "Hotkey"};
     Action second{"Second", "Second.asi", "Second.ini", "Menu", "Hotkey"};
     Action third{"Third", "Third.asi", "Third.ini", "Menu", "Hotkey"};
-    if (encodeBinding(first, "", {VK_CONTROL, VK_SHIFT, VK_F6}) != "Ctrl+Shift+F6")
+    if (encodeBinding(first, "", {VK_CONTROL, VK_SHIFT, VK_F6}) != "Ctrl+Shift+F6" ||
+        encodeBinding(first, umlaut) != ";" ||
+        replaceValue("[Menu]\nHotkey=; ; comment\n", first, "F8") !=
+            "[Menu]\nHotkey=F8 ; comment\n")
       return 2;
     if (encodeBinding(second, "", {VK_CONTROL, VK_F6}) != "0x75")
       return 3;

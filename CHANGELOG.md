@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.5
+- Map symbolic letters, digits, and punctuation across keyboard layouts.
+- Recognize German letter aliases in either direction, including German Ö and US semicolon.
+- Preserve the physical key position when sending a shortcut or saving a recorded named binding.
+
 ## 1.1.4
 - Record Ctrl, Shift, and Alt combinations in the Hotkeys editor.
 - Display and send punctuation bindings using their physical key position on the active keyboard layout, including Pywel Casino on German keyboards.

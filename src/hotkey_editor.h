@@ -18,16 +18,16 @@ static std::string encodeBinding(const Action &a, std::string input,
                                  std::vector<int> recorded = {}) {
   input = trim(input);
   if (recorded.empty() &&
-      (input.empty() || input.find_first_of("\r\n;|") != input.npos))
+      (input.empty() || input.find_first_of("\r\n|") != input.npos || bindingComment(input) != input.npos))
     throw std::runtime_error(
         "Enter one key or combination, such as F6 or Ctrl+F6.");
   if (lower(a.file) == "reshade.ini")
     throw std::runtime_error("Change ReShade shortcuts in its own settings.");
   std::string original = read(a);
   auto bar = original.find('|');
-  std::string base = trim(original.substr(0, bar));
-  bool numeric = !base.empty() && isdigit((unsigned char)base[0]) &&
-                 base.find(',') == base.npos;
+  std::string base = trim(original.substr(0, (std::min)(bar, bindingComment(original))));
+  const bool numeric = !base.empty() && isdigit((unsigned char)base[0]) &&
+                       base.find(',') == base.npos && !standaloneDigit(a, base);
   if (!recorded.empty()) {
     // Preserve the modifier flags stored separately by some mods.
     for (int modifier : keysFrom(a, ""))
@@ -49,8 +49,35 @@ static std::string encodeBinding(const Action &a, std::string input,
       }
     }
   }
+  if (recorded.empty()) {
+    auto separator = input.find_last_of('+');
+    if (input == "+")
+      separator = input.npos;
+    else if (input.size() >= 2 && input.compare(input.size() - 2, 2, "++") == 0)
+      --separator;
+    const size_t start = separator == input.npos ? 0 : separator + 1;
+    const auto token = trim(input.substr(start));
+    const auto symbol = keySymbol(token);
+    const bool numericLiteral = symbol >= L'0' && symbol <= L'9';
+    if (symbol && (!numeric || (!numericLiteral && separator == input.npos))) {
+      const auto layout = gameKeyboardLayout();
+      auto scan = scanForSymbol(symbol, layout);
+      if (!scan)
+        scan = scanForLocalizedSymbol(token, layout);
+      const auto canonical = usSymbolForScan(scan);
+      if (canonical) {
+        if (numeric) {
+          input = std::to_string(vkForScan(scan, layout));
+        } else {
+          input.replace(start, input.size() - start,
+                        scan == 0x29 ? "Grave" : std::string(1, canonical));
+        }
+      }
+    }
+  }
   std::string converted = input;
-  if (!numeric && !input.empty() && isdigit((unsigned char)input[0]))
+  if (!numeric && !input.empty() && isdigit((unsigned char)input[0]) &&
+      !standaloneDigit(a, input))
     throw std::runtime_error(
         "Use a key name such as F8 for a named-key setting.");
   if (numeric) {
@@ -66,8 +93,11 @@ static std::string encodeBinding(const Action &a, std::string input,
       char b[16];
       snprintf(b, sizeof b, "0x%X", k);
       converted = b;
-    } else
+    } else {
       converted = std::to_string(k);
+      if (standaloneDigit(a, converted))
+        converted.insert(converted.begin(), '0');
+    }
   }
   if (bar != original.npos)
     converted += original.substr(bar);
@@ -118,7 +148,7 @@ static std::string replaceValue(const std::string &bytes, const Action &a,
         while (start < line.size() &&
                (line[start] == ' ' || line[start] == '\t'))
           ++start;
-        size_t stop = line.find(';', start);
+        size_t stop = bindingComment(line, start);
         if (stop == line.npos)
           stop = line.size();
         while (stop > start &&

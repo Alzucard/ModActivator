@@ -59,12 +59,12 @@ static std::string keyName(int k) {
   return {};
 }
 static std::string configKeyName(int key) {
-  if (isOemKey(key)) {
-    const auto scan = MapVirtualKeyExW(key, MAPVK_VK_TO_VSC_EX, gameKeyboardLayout());
-    for (const auto &entry : punctuation)
-      if (entry.scan == scan && entry.symbol != ';')
-        return entry.scan == 0x29 ? "Grave" : std::string(1, entry.symbol);
-    return {};
+  if (isPrintableKey(key)) {
+    const auto scan = scanForVk(key, gameKeyboardLayout());
+    const char symbol = usSymbolForScan(scan);
+    if (symbol)
+      return scan == 0x29 ? "Grave" : std::string(1, symbol);
+    return localizedKey(key);
   }
   return keyName(key);
 }
@@ -73,7 +73,7 @@ static std::string shortcutLabel(const std::vector<int> &keys) {
   for (int k : keys) {
     if (!out.empty())
       out += " + ";
-    auto label = isOemKey(k) ? localizedKey(k) : keyName(k);
+    auto label = isPrintableKey(k) ? localizedKey(k) : keyName(k);
     out += label.empty() ? "VK " + std::to_string(k) : label;
   }
   return out;
@@ -98,7 +98,7 @@ static std::vector<int> recordShortcut(const char *label) {
   ImGui::TextDisabled("Esc cancels");
   int main = 0;
   for (int key = VK_BACK; key <= VK_OEM_102; ++key) {
-    if ((keyName(key).empty() && !isOemKey(key)) ||
+    if ((keyName(key).empty() && !isPrintableKey(key)) ||
         key == VK_CONTROL || key == VK_SHIFT || key == VK_MENU || !held(key))
       continue;
     if (main)
