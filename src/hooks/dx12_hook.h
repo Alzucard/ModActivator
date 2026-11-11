@@ -2,12 +2,13 @@
 // MIT License, Copyright (c) 2026 XeTrinityz. See THIRD_PARTY_NOTICES.md.
 // Changes: Master Looter namespaces, logger, settings and menu hooks; icon atlas code removed.
 #pragma once
+#include <Windows.h>
 
 namespace ml::hooks
 {
-    // Grabs the DX12 present/queue vtable pointers from a throwaway device and
-    // detours them with MinHook. Must be called after MH_Initialize().
-    bool InstallDX12Hooks();
+    // Uses ReShade callbacks when available, otherwise installs the DX12 hooks.
+    // Must be called after MH_Initialize().
+    bool InstallDX12Hooks(HMODULE self, bool useReShadeEvents);
     void RemoveDX12Hooks();
 
     // True once a frame has reached this mod and the menu renderer is up.

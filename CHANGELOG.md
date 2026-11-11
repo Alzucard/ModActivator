@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.2.2.2
+- Use ReShade's presentation callbacks on ReShade installations, avoiding a second set of DXGI hooks.
+
 ## 1.2.2.1
 - Capture the keys pressed in the shortcut field, including Ctrl, Shift, and Alt.
 - Move Show as into the Mod placement table.

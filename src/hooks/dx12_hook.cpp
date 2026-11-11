@@ -6,6 +6,8 @@
 #include <Windows.h>
 #include <d3d12.h>
 #include <dxgi1_5.h>
+#include <psapi.h>
+#include <algorithm>
 #include <atomic>
 #include <vector>
 
@@ -15,6 +17,7 @@
 #include <imgui_impl_win32.h>
 
 #include "input.h"
+#include "reshade_events.h"
 #include "xinput_hook.h"
 #include "hdr_composite_shader.h"
 #include "../core/log.h"
@@ -971,7 +974,8 @@ namespace ml::hooks
     // Returns whether a frame was actually submitted (for the post-present device
     // check). isGameFacing is false for native presents while a wrapper owns the
     // drawing - those are Streamline's read-only finished frames, left untouched.
-    static bool RenderOverlay(IDXGISwapChain3* swapChain, bool isGameFacing, UINT flags)
+    static bool RenderOverlay(IDXGISwapChain3* swapChain, bool isGameFacing, UINT flags,
+                              ID3D12CommandQueue* presentQueue = nullptr)
     {
         // Counted before anything can refuse: every path that could draw comes
         // through here, so this is the one number that says whether this mod is
@@ -1047,6 +1051,8 @@ namespace ml::hooks
                 g_imguiReady = true;
             }
 
+            if (presentQueue)
+                PublishPresentQueue(presentQueue, true);
             // This also covers XInput modules loaded after the first opening.
             hooks::EnsureXInputHooks();
             drew = DrawOverlay(swapChain);
@@ -1167,6 +1173,64 @@ namespace ml::hooks
         // next ReconcileSwapChain, which would otherwise see the new signature
         // as "unchanged" and never resize the offscreen target to match).
         CreateOffscreenTarget(g_scWidth, g_scHeight);
+    }
+
+    static void OnReShadePresent(reshade_api::DeviceObject *queue,
+                                 reshade_api::DeviceObject *swapChain,
+                                 const RECT *, const RECT *, uint32_t, const RECT *)
+    {
+        if (!queue || !swapChain)
+            return;
+        const auto *device = queue->get_device();
+        if (!device || device->get_api() != reshade_api::d3d12)
+            return;
+        auto *nativeQueue = reinterpret_cast<ID3D12CommandQueue *>(queue->get_native());
+        auto *nativeSwapChain = reinterpret_cast<IDXGISwapChain *>(swapChain->get_native());
+        IDXGISwapChain3 *chain = nullptr;
+        if (!nativeQueue || !nativeSwapChain ||
+            FAILED(nativeSwapChain->QueryInterface(IID_PPV_ARGS(&chain))))
+            return;
+
+        // Restrict drawing to the actual game window, including when other
+        // D3D12 windows are being presented by other add-ons.
+        DXGI_SWAP_CHAIN_DESC desc = {};
+        if (SUCCEEDED(chain->GetDesc(&desc)) && desc.OutputWindow &&
+            (desc.OutputWindow == g_hwnd ||
+             GetAncestor(desc.OutputWindow, GA_ROOT) == GetForegroundWindow()))
+        {
+            const bool drew = RenderOverlay(chain, true, 0, nativeQueue);
+            PostPresentDeviceCheck(drew);
+        }
+        chain->Release();
+    }
+
+    static void OnReShadeDestroySwapChain(reshade_api::DeviceObject *swapChain, bool resize)
+    {
+        if (!g_imguiReady || !g_swapChain || !swapChain)
+            return;
+        const auto *device = swapChain->get_device();
+        if (!device || device->get_api() != reshade_api::d3d12)
+            return;
+        auto *native = reinterpret_cast<IDXGISwapChain *>(swapChain->get_native());
+        IDXGISwapChain3 *chain = nullptr;
+        if (!native || FAILED(native->QueryInterface(IID_PPV_ARGS(&chain))))
+            return;
+        const bool ours = chain == g_swapChain;
+        chain->Release();
+        if (!ours)
+            return;
+
+        PreResizeCleanup();
+        g_swapChain = nullptr; // Reconcile on the next real presentation.
+        if (!resize)
+        {
+            EnterCriticalSection(&g_queueLock);
+            if (g_presentQueue)
+                g_presentQueue->Release();
+            g_presentQueue = nullptr;
+            g_presentQueuePinned = false;
+            LeaveCriticalSection(&g_queueLock);
+        }
     }
 
     // Native-swapchain Present/ResizeBuffers byte-detours (from the dummy vtable).
@@ -2473,7 +2537,21 @@ namespace ml::hooks
 
     bool MenuHasFrame() { return g_imguiReady; }
 
-    bool InstallDX12Hooks()
+    static HMODULE FindReShade()
+    {
+        HMODULE modules[512]{};
+        DWORD bytes = 0;
+        if (!K32EnumProcessModules(GetCurrentProcess(), modules, sizeof modules, &bytes))
+            return nullptr;
+        const auto count = (std::min)(bytes, static_cast<DWORD>(sizeof modules)) /
+                           sizeof(HMODULE);
+        for (size_t i = 0; i < count; ++i)
+            if (GetProcAddress(modules[i], "ReShadeRegisterAddon"))
+                return modules[i];
+        return nullptr;
+    }
+
+    bool InstallDX12Hooks(HMODULE self, bool useReShadeEvents)
     {
         // No throwaway device, ever. This used to create a D3D12 device, a
         // command queue and a swapchain purely to read vtable slots, then
@@ -2494,6 +2572,24 @@ namespace ml::hooks
 
         InitializeCriticalSection(&g_queueLock);
         g_queueLockReady = true;
+
+        if (HMODULE reshade = useReShadeEvents ? FindReShade() : nullptr)
+        {
+            const auto registerAddon = reinterpret_cast<reshade_api::RegisterAddon>(
+                GetProcAddress(reshade, "ReShadeRegisterAddon"));
+            const auto registerEvent = reinterpret_cast<reshade_api::RegisterEvent>(
+                GetProcAddress(reshade, "ReShadeRegisterEventForAddon"));
+            if (!registerEvent || !registerAddon(self, reshade_api::version))
+            {
+                LOG_ERR("ReShade add-on API registration failed. DirectX hook stacking was skipped.");
+                return false;
+            }
+            registerEvent(self, reshade_api::destroySwapchain,
+                          reinterpret_cast<void*>(&OnReShadeDestroySwapChain));
+            registerEvent(self, reshade_api::present, reinterpret_cast<void*>(&OnReShadePresent));
+            LOG("Using ReShade presentation callbacks. No DXGI hooks installed.");
+            return true;
+        }
 
         // DLSS-G / Frame Generation: patch the factory's CreateSwapChainForHwnd
         // slot so the game's swapchain comes back wrapped, letting the overlay

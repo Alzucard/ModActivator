@@ -680,7 +680,9 @@ static DWORD WINAPI start(void *arg) {
   LOG("Mod Activator " MODACTIVATOR_VERSION " started.");
   if (MH_Initialize() != MH_OK)
     return 0;
-  if (!ml::hooks::InstallDX12Hooks())
+  const bool useReShadeEvents =
+      GetPrivateProfileIntA("General", "UseReShadeEvents", 1, config.c_str()) != 0;
+  if (!ml::hooks::InstallDX12Hooks((HMODULE)arg, useReShadeEvents))
     return 0;
   if (HANDLE h = CreateThread(nullptr, 0, dispatch, nullptr, 0, nullptr))
     CloseHandle(h);

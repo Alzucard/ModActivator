@@ -1,2 +1,2 @@
 #pragma once
-#define MODACTIVATOR_VERSION "1.2.2.1"
+#define MODACTIVATOR_VERSION "1.2.2.2"
