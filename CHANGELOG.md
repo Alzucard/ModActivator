@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.1.5
+## 1.2.0
 - Queue mod actions in click order and keep dispatched shortcuts from opening ModActivator or entering its recorder.
 - Scan configs once per refresh and avoid false conflicts from duplicate entries.
 - Preserve inline comments when editing and avoid marking unchanged bindings for restart.
