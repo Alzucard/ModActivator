@@ -5,9 +5,8 @@
 #include <sstream>
 static std::mutex catalogMutex;
 static std::vector<Action> catalog, allBindings;
-static Action pendingAction;
+static std::deque<Action> pendingActions;
 static std::set<std::string> restartRequired;
-static bool hasPending = false;
 static std::atomic<bool> refreshRequested{false};
 static std::string lower(std::string s) {
   for (auto &c : s)
@@ -83,7 +82,6 @@ static bool bindingField(const std::string &field) {
          (k.size() >= 3 && k.substr(k.size() - 3) == "key") ||
          (k.size() >= 5 && k.substr(k.size() - 5) == "keyvk");
 }
-static bool validKeys(const Action &a) { return validShortcut(keys(a)); }
 static std::string identity(const Action &a) {
   return lower(a.file + "|" + a.section + "|" + a.key);
 }
@@ -147,7 +145,7 @@ static BindingComments readBindingComments(const std::filesystem::path &path) {
     } else {
       const auto equals = line.find('=');
       if (equals != line.npos && !section.empty()) {
-        const auto inlineComment = line.find(';', equals + 1);
+        const auto inlineComment = bindingComment(line, equals + 1);
         if (inlineComment != line.npos)
           previousComment += " " + line.substr(inlineComment + 1);
         if (!previousComment.empty())
@@ -204,8 +202,8 @@ static std::string moduleFor(const std::filesystem::path &rel,
   }
   return {};
 }
-static std::vector<Action> discover(const std::vector<std::string> &mods,
-                                    int toggles = 0) {
+static std::vector<Action> scanBindings(const std::vector<std::string> &mods) {
+  const auto layout = gameKeyboardLayout();
   std::vector<Action> found;
   std::error_code ec;
   std::filesystem::recursive_directory_iterator it(
@@ -213,19 +211,21 @@ static std::vector<Action> discover(const std::vector<std::string> &mods,
       end;
   size_t files = 0;
   for (; it != end && !ec && files < 2000; it.increment(ec)) {
-    if (it->is_symlink(ec)) {
-      if (it->is_directory(ec))
-        it.disable_recursion_pending();
+    std::error_code statusError;
+    const auto status = it->symlink_status(statusError);
+    if (statusError || std::filesystem::is_symlink(status)) {
+      it.disable_recursion_pending();
       continue;
     }
-    if (it->is_directory(ec)) {
+    if (std::filesystem::is_directory(status)) {
       auto n = lower(it->path().filename().string());
       if (it.depth() >= 2 || n == "reshade-shaders" || n == "community" ||
           n == "cache" || n == "icons" || n == "shapes")
         it.disable_recursion_pending();
       continue;
     }
-    if (lower(it->path().extension().string()) != ".ini")
+    if (!std::filesystem::is_regular_file(status) ||
+        lower(it->path().extension().string()) != ".ini")
       continue;
     ++files;
     auto rel = it->path().lexically_relative(std::filesystem::path(folder));
@@ -234,13 +234,13 @@ static std::vector<Action> discover(const std::vector<std::string> &mods,
       continue;
     auto file = rel.generic_string();
     const auto comments = readBindingComments(it->path());
-    char sections[65536];
+    char sections[65536]{};
     DWORD count = GetPrivateProfileSectionNamesA(sections, sizeof sections,
                                                  it->path().string().c_str());
     if (count == sizeof sections - 2)
       continue;
     for (const char *sec = sections; *sec; sec += strlen(sec) + 1) {
-      char values[65536];
+      char values[65536]{};
       DWORD size = GetPrivateProfileSectionA(sec, values, sizeof values,
                                              it->path().string().c_str());
       if (size == sizeof values - 2)
@@ -266,32 +266,40 @@ static std::vector<Action> discover(const std::vector<std::string> &mods,
                  field,
                  false};
         classifyBinding(a, comments);
-        if (toggles != 2 && !(toggles ? a.featureRank : a.menuRank))
-          continue;
         a.toggle = a.featureRank > 0;
-        if (!validKeys(a))
-          continue;
         a.cachedValue = read(a);
-        a.cachedKeys = keysFrom(a, a.cachedValue);
-        found.push_back(a);
+        a.cachedKeys = keysFrom(a, a.cachedValue, layout);
+        if (validShortcut(a.cachedKeys))
+          found.push_back(std::move(a));
       }
     }
   }
-  // Stable choice independent of filesystem enumeration order; one UI binding
-  // per module.
-  std::sort(found.begin(), found.end(),
+  std::sort(found.begin(), found.end(), [](const Action &a, const Action &b) {
+    const auto am = lower(a.module), bm = lower(b.module);
+    return am == bm ? identity(a) < identity(b) : am < bm;
+  });
+  found.erase(std::unique(found.begin(), found.end(), [](const Action &a, const Action &b) {
+                return identity(a) == identity(b);
+              }), found.end());
+  return found;
+}
+
+static std::vector<Action> selectActions(const std::vector<Action> &bindings,
+                                         bool toggles = false) {
+  std::vector<Action> found;
+  for (const auto &action : bindings)
+    if (toggles ? action.featureRank : action.menuRank)
+      found.push_back(action);
+  // Pick the highest-ranked action, breaking ties by configuration path.
+  std::stable_sort(found.begin(), found.end(),
             [toggles](const Action &a, const Action &b) {
               auto am = lower(a.module), bm = lower(b.module);
               if (am != bm)
                 return am < bm;
-              int ar = toggles == 2 ? 0 : (toggles ? a.featureRank : a.menuRank);
-              int br = toggles == 2 ? 0 : (toggles ? b.featureRank : b.menuRank);
-              if (ar != br)
-                return ar > br;
-              return identity(a) < identity(b);
+              return toggles ? a.featureRank > b.featureRank
+                             : a.menuRank > b.menuRank;
             });
-  if (toggles != 2)
-    found.erase(std::unique(found.begin(), found.end(),
+  found.erase(std::unique(found.begin(), found.end(),
                             [](const Action &a, const Action &b) {
                               return lower(a.module) == lower(b.module);
                             }),
@@ -315,21 +323,24 @@ static void refresh() {
     } while (Module32Next(h, &e));
   CloseHandle(h);
   try {
-    auto found = discover(mods);
-    auto all = discover(mods, 2);
-    auto toggles = discover(mods, true);
+    auto all = scanBindings(mods);
+    auto found = selectActions(all);
+    auto toggles = selectActions(all, true);
     for (auto &a : toggles)
       if (a.typeOverride == 2 || std::none_of(found.begin(), found.end(), [&](const Action &b) {
             return lower(a.module) == lower(b.module);
           }))
         found.push_back(a);
     const auto ownKeys = openerKeys();
+    std::map<int, std::vector<size_t>> bindingsByKey;
+    for (size_t i = 0; i < all.size(); ++i)
+      bindingsByKey[all[i].cachedKeys.back()].push_back(i);
     for (size_t i = 0; i < all.size(); ++i) {
       auto &a = all[i];
       a.severity = conflict(a.cachedKeys, ownKeys);
       if (a.severity)
         a.overlapNames = "ModActivator\n";
-      for (size_t j = 0; j < all.size(); ++j)
+      for (size_t j : bindingsByKey.at(a.cachedKeys.back()))
         if (i != j) {
           int c = conflict(a.cachedKeys, all[j].cachedKeys);
           if (c) {

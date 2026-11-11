@@ -303,7 +303,7 @@ namespace ml::input
             }
             if (IsKeyboard(msg))
             {
-                if (State::Get().keyboardPassthrough.load() && GetMessageExtraInfo() == 0x4D414354)
+                if (static_cast<ULONG_PTR>(GetMessageExtraInfo()) == shortcutInputTag)
                     return CallWindowProc(g_original, hwnd, msg, wParam, lParam);
                 ImGui_ImplWin32_WndProcHandler(hwnd, msg, wParam, lParam);
                 // Releases reach the game so a key held when the menu opened does not stick.

@@ -31,3 +31,21 @@ with TemporaryDirectory(dir=p) as tmp:
     result = settings((str(fixture) + '\\').encode())
     assert result == 0, f'Settings regression check failed at step {result}'
 print('PASS: recorded chords, numeric modifier retention, keyboard layout mapping, saved opener, tab assignment and order.')
+
+commented = b'[Menu]\r\nHotkey=F8 ; note | kept verbatim\r\n'
+r, msg, out = edit('InlineNote.ini', commented, 'Menu', 'Hotkey', 'F7')
+assert not r and out == commented.replace(b'F8', b'F7'), (r, msg, out)
+suffixed = b'[Menu]\nHotkey=F8|LeftStick,RightStick,A ; keep | note\n'
+r, msg, out = edit('InlineController.ini', suffixed, 'Menu', 'Hotkey', 'F7')
+assert not r and out == suffixed.replace(b'F8', b'F7'), (r, msg, out)
+with TemporaryDirectory(dir=p) as tmp:
+    fixture = pathlib.Path(tmp)
+    config = fixture / 'Same.ini'
+    contents = b'[Menu]\nHotkey=F8\n'
+    config.write_bytes(contents)
+    error = ctypes.create_string_buffer(1000)
+    result = fn((str(fixture) + '\\').encode(), b'Same.ini', b'Menu',
+                b'Hotkey', b'F8', contents, error, len(error))
+    assert result == 0 and config.read_bytes() == contents
+    assert not config.with_suffix('.ini.modactivator.bak').exists()
+print('PASS: inline comment and controller suffix preservation, no-op edits.')

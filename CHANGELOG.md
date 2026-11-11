@@ -1,6 +1,10 @@
 # Changelog
 
 ## 1.1.5
+- Queue mod actions in click order and keep dispatched shortcuts from opening ModActivator or entering its recorder.
+- Scan configs once per refresh and avoid false conflicts from duplicate entries.
+- Preserve inline comments when editing and avoid marking unchanged bindings for restart.
+- Reset overlay input on close and skip frames whose DirectX allocator is still in use.
 - Map symbolic letters, digits, and punctuation across keyboard layouts.
 - Recognize German letter aliases in either direction, including German Ö and US semicolon.
 - Preserve the physical key position when sending a shortcut or saving a recorded named binding.

@@ -44,12 +44,18 @@ static bool isPrintableKey(int key) {
          (key >= VK_OEM_4 && key <= VK_OEM_8) || key == VK_OEM_102;
 }
 static std::string localizedKey(int key, HKL layout = gameKeyboardLayout()) {
-  auto character = MapVirtualKeyExW(key, MAPVK_VK_TO_CHAR, layout) & 0xffffu;
-  if (character < 32)
+  BYTE keyboard[256]{};
+  wchar_t wide[8]{};
+  // Flag 4 keeps the call from changing the game's dead-key state.
+  int count = ToUnicodeEx(key, scanForVk(key, layout), keyboard, wide,
+                          IM_ARRAYSIZE(wide), 4, layout);
+  if (count < 0)
+    count = 1;
+  if (!count || count > IM_ARRAYSIZE(wide) || wide[0] < 32)
     return {};
-  wchar_t wide = (wchar_t)character;
-  char utf8[4]{};
-  const int n = WideCharToMultiByte(CP_UTF8, 0, &wide, 1, utf8, sizeof utf8,
+  CharUpperBuffW(wide, count);
+  char utf8[sizeof wide * 2]{};
+  const int n = WideCharToMultiByte(CP_UTF8, 0, wide, count, utf8, sizeof utf8,
                                    nullptr, nullptr);
   return std::string(utf8, n);
 }
@@ -67,19 +73,21 @@ static wchar_t keySymbol(const std::string &token) {
 }
 static unsigned scanForSymbol(wchar_t symbol, HKL layout) {
   const SHORT key = VkKeyScanExW(symbol, layout);
-  return key == -1 ? 0 : scanForVk(LOBYTE(key), layout);
+  // Ctrl/Alt/AltGr combinations can type a glyph on an unrelated key.
+  return key == -1 || HIBYTE(key) > 1 ? 0 : scanForVk(LOBYTE(key), layout);
 }
 static unsigned scanForLocalizedSymbol(const std::string &token, HKL layout) {
   const auto symbol = keySymbol(token);
   if (symbol < 128)
     return 0;
 
-  // Standard German spellings also work when only the US layout is installed.
+  // These aliases have a dedicated position on the standard German and Spanish layouts.
   switch (symbol) {
   case L'\u00d6': case L'\u00f6': return 0x27; // O umlaut
   case L'\u00dc': case L'\u00fc': return 0x1A; // U umlaut
   case L'\u00c4': case L'\u00e4': return 0x28; // A umlaut
   case L'\u00df': case L'\u1e9e': return 0x0C; // Eszett
+  case L'\u00d1': case L'\u00f1': return 0x27; // N with tilde
   }
   if (const unsigned scan = scanForSymbol(symbol, layout))
     return scan;

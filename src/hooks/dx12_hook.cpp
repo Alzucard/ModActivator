@@ -788,16 +788,16 @@ namespace ml::hooks
 
     // Records + submits the overlay. Kept as its own function so hkPresent can
     // wrap the call in __try/__except without object-unwinding conflicts.
-    static void DrawOverlay(IDXGISwapChain3* swapChain)
+    static bool DrawOverlay(IDXGISwapChain3* swapChain)
     {
         // Pin our render targets to the live swapchain before touching them.
         // A DLSS Frame Generation toggle silently swaps it; if the rebuild
         // fails, sit this frame out rather than draw into freed buffers.
         if (!ReconcileSwapChain(swapChain))
-            return;
+            return false;
 
         if (!EnsureCompositePipeline(g_scFormat))
-            return;
+            return false;
 
         // Hold our own ref on the present queue for the duration of this frame
         // so a concurrent republish can't pull it out from under us. Not
@@ -812,7 +812,7 @@ namespace ml::hooks
         }
         LeaveCriticalSection(&g_queueLock);
         if (!submitQueue)
-            return;
+            return false;
 
         // A language change needs glyphs the atlas does not hold. Rebuild
         // between frames, and only once our last submit has retired: the
@@ -874,18 +874,19 @@ namespace ml::hooks
             // out of bounds. Should not happen after ReconcileSwapChain, but a
             // freed device is worse than a dropped overlay frame.
             submitQueue->Release();
-            return;
+            return false;
         }
         FrameContext& frame = g_frames[idx];
 
-        if (frame.fenceValue != 0 && g_fence->GetCompletedValue() < frame.fenceValue)
+        // The allocator cannot be reset while the GPU still uses it.
+        const auto completed = g_fence->GetCompletedValue();
+        if (completed < frame.fenceValue || completed == UINT64_MAX ||
+            FAILED(frame.commandAllocator->Reset()) ||
+            FAILED(g_commandList->Reset(frame.commandAllocator, nullptr)))
         {
-            g_fence->SetEventOnCompletion(frame.fenceValue, g_fenceEvent);
-            WaitForSingleObject(g_fenceEvent, 1000);
+            submitQueue->Release();
+            return false;
         }
-
-        frame.commandAllocator->Reset();
-        g_commandList->Reset(frame.commandAllocator, nullptr);
 
         // --- Pass 1: ImGui draws into the offscreen SDR target -------------
         D3D12_RESOURCE_BARRIER offscreenBarrier = {};
@@ -948,14 +949,22 @@ namespace ml::hooks
         if (FAILED(g_commandList->Close()))
         {
             submitQueue->Release();
-            return;
+            return false;
         }
 
         ID3D12CommandList* toExec[] = { g_commandList };
         submitQueue->ExecuteCommandLists(1, toExec);
-        submitQueue->Signal(g_fence, ++g_fenceValue);
-        frame.fenceValue = g_fenceValue;
+        const auto signal = submitQueue->Signal(g_fence, g_fenceValue + 1);
         submitQueue->Release();
+        if (FAILED(signal))
+        {
+            // Without a fence this allocator cannot be reused safely.
+            LOG_ERR("Overlay fence signal failed (0x%08X) - overlay disabled.", signal);
+            g_renderDisabled = true;
+            return false;
+        }
+        frame.fenceValue = ++g_fenceValue;
+        return true;
     }
 
     // Init-if-needed and draw the overlay into swapChain's current back buffer.
@@ -1028,19 +1037,19 @@ namespace ml::hooks
 
         if (!gui::WantsDraw())
         {
-            ImGui::GetIO().MouseDrawCursor = false;
+            gui::FeedInput();
             return false;
         }
 
         bool drew = false;
         __try
         {
-            DrawOverlay(swapChain);
-            drew = true;
+            drew = DrawOverlay(swapChain);
             // Proof the render path is alive. State::Captures reads this so an
             // overlay that stops drawing releases the pad instead of holding it
             // for the rest of the session.
-            State::Get().lastDrawAt = GetTickCount();
+            if (drew)
+                State::Get().lastDrawAt = GetTickCount();
         }
         __except (EXCEPTION_EXECUTE_HANDLER)
         {

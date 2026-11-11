@@ -14,6 +14,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <filesystem>
+#include <deque>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <mutex>
@@ -40,9 +41,9 @@ struct Action {
 static std::string read(const Action &a) {
   ++configReads;
   char b[512];
-  GetPrivateProfileStringA(a.section.c_str(), a.key.c_str(), "", b, sizeof b,
-                           (folder + a.file).c_str());
-  return b;
+  const auto size = GetPrivateProfileStringA(
+      a.section.c_str(), a.key.c_str(), "", b, sizeof b, (folder + a.file).c_str());
+  return size < sizeof b - 1 ? std::string(b, size) : std::string{};
 }
 static bool held(int k) { return (GetAsyncKeyState(k) & 0x8000) != 0; }
 #include "shortcut_keys.h"
@@ -134,13 +135,19 @@ static bool validShortcut(const std::vector<int> &ks) {
   }
   return true;
 }
+static std::string compactShortcut(std::string s) {
+  s.erase(std::remove_if(s.begin(), s.end(),
+                         [](unsigned char c) { return c == ' ' || c == '\t'; }),
+          s.end());
+  return s;
+}
 static std::vector<int> parseShortcut(std::string s,
                                       HKL layout = gameKeyboardLayout(),
                                       unsigned *mainScan = nullptr,
                                       bool namedDigit = false) {
-  s.erase(std::remove_if(s.begin(), s.end(),
-                         [](unsigned char c) { return c == ' ' || c == 9; }),
-          s.end());
+  s = compactShortcut(std::move(s));
+  if (mainScan)
+    *mainScan = 0;
   std::vector<int> out;
   size_t pos = 0;
   while (true) {
@@ -209,6 +216,8 @@ static bool standaloneDigit(const Action &a, const std::string &s) {
 static std::vector<int> keysFrom(const Action &a, std::string s,
                                  HKL layout = gameKeyboardLayout(),
                                  unsigned *mainScan = nullptr) {
+  if (mainScan)
+    *mainScan = 0;
   configReads += 3;
   s.erase(std::remove_if(s.begin(), s.end(),
                          [](unsigned char c) { return c == ' ' || c == '\t'; }),
@@ -243,7 +252,6 @@ static std::vector<int> keysFrom(const Action &a, std::string s,
   out.insert(out.end(), named.begin(), named.end());
   return out;
 }
-static std::vector<int> keys(const Action &a) { return keysFrom(a, read(a)); }
 namespace ml::Log {
 void Write(const char *level, const char *fmt, ...) {
   char b[2048];
@@ -264,7 +272,7 @@ void Write(const char *level, const char *fmt, ...) {
 static bool key(int k, bool up, unsigned scan) {
   INPUT i{};
   i.type = INPUT_KEYBOARD;
-  i.ki.dwExtraInfo = 0x4D414354;
+  i.ki.dwExtraInfo = ml::shortcutInputTag;
   i.ki.wVk = (WORD)k;
   i.ki.dwFlags = up ? KEYEVENTF_KEYUP : 0;
   if (scan) {
@@ -278,77 +286,103 @@ static bool key(int k, bool up, unsigned scan) {
   }
   return SendInput(1, &i, sizeof i) == 1;
 }
+static void dispatchAction(const Action &action) {
+  const auto window = GetForegroundWindow();
+  if (!ml::State::ForegroundIsOurs())
+    return;
+
+  Sleep(220);
+  const auto layout = gameKeyboardLayout();
+  unsigned mainScan = 0;
+  auto keys = keysFrom(action, action.cachedValue, layout, &mainScan);
+  if (!validShortcut(keys))
+    return;
+  if (keys.size() != action.cachedKeys.size() ||
+      !std::equal(keys.begin(), keys.end() - 1, action.cachedKeys.begin())) {
+    LOG_ERR("Shortcut cancelled: modifier settings changed. Refresh the list.");
+    refreshRequested.store(true);
+    return;
+  }
+  const auto inputHeld = [&] {
+    return heldModifiers() || held(VK_LWIN) || held(VK_RWIN) ||
+           held(VK_LBUTTON) || held(keys.back());
+  };
+  for (int attempt = 0; attempt < 40 && inputHeld() &&
+                        GetForegroundWindow() == window; ++attempt)
+    Sleep(25);
+
+  auto &state = ml::State::Get();
+  size_t pressed = 0;
+  {
+    std::lock_guard<std::mutex> lock(catalogMutex);
+    if (restartRequired.count(lower(action.module)) ||
+        !GetModuleHandleA(action.module.c_str()) ||
+        GetForegroundWindow() != window || inputHeld()) {
+      LOG_ERR("Shortcut cancelled: mod unavailable, input held, or game lost focus.");
+      return;
+    }
+    unsigned currentScan = 0;
+    const auto currentValue = read(action);
+    const auto currentKeys = keysFrom(action, currentValue, gameKeyboardLayout(), &currentScan);
+    if (currentValue != action.cachedValue || currentKeys != keys || currentScan != mainScan) {
+      LOG_ERR("Shortcut cancelled: config or keyboard layout changed. Refresh the list.");
+      refreshRequested.store(true);
+      return;
+    }
+    state.sendingShortcut.store(true);
+    for (int k : keys) {
+      const auto scan = pressed + 1 == keys.size() ? mainScan : 0;
+      if (GetForegroundWindow() != window || !key(k, false, scan))
+        break;
+      ++pressed;
+    }
+  }
+
+  bool complete = pressed == keys.size();
+  if (pressed)
+    Sleep(130);
+  while (pressed) {
+    const auto scan = pressed == keys.size() ? mainScan : 0;
+    const auto k = keys[--pressed];
+    if (!key(k, true, scan) && !key(k, true, scan))
+      complete = false;
+  }
+  state.sendingShortcut.store(false);
+  if (complete)
+    LOG("Shortcut dispatched: %s", action.label.c_str());
+  else
+    LOG_ERR("Shortcut incomplete: %s", action.label.c_str());
+}
+
 static DWORD WINAPI dispatch(void *) {
   for (;;) {
-    if (refreshRequested.exchange(false)) {
+    if (refreshRequested.exchange(false))
       refresh();
-    }
-    Action a;
+    Action action;
     bool pending = false;
     {
       std::lock_guard<std::mutex> lock(catalogMutex);
-      pending = hasPending;
-      if (pending) {
-        a = pendingAction;
-        hasPending = false;
+      if (!pendingActions.empty()) {
+        action = std::move(pendingActions.front());
+        pendingActions.pop_front();
+        pending = true;
       }
     }
-    if (pending) {
-      bool restart;
-      {
-        std::lock_guard<std::mutex> lock(catalogMutex);
-        restart = restartRequired.count(lower(a.module)) != 0;
-      }
-      if (restart)
-        continue;
-      Sleep(220);
-      const auto layout = gameKeyboardLayout();
-      unsigned mainScan = 0;
-      auto ks = keysFrom(a, read(a), layout, &mainScan);
-      bool valid = validShortcut(ks) && GetModuleHandleA(a.module.c_str());
-      for (int k : ks)
-        if (k < 1 || k > 255)
-          valid = false;
-      for (int t = 0; t < 40 && (held(16) || held(17) || held(18) || held(1));
-           ++t)
-        Sleep(25);
-      if (valid && ml::State::ForegroundIsOurs() && !held(16) && !held(17) &&
-          !held(18) && !held(1)) {
-        ml::State::Get().keyboardPassthrough.store(a.toggle);
-        size_t pressed = 0;
-        for (int k : ks) {
-          const auto scan = pressed + 1 == ks.size() ? mainScan : 0;
-          if (!ml::State::ForegroundIsOurs() || !key(k, false, scan))
-            break;
-          ++pressed;
-        }
-        bool complete = pressed == ks.size();
-        Sleep(130);
-        while (pressed) {
-          const auto scan = pressed == ks.size() ? mainScan : 0;
-          key(ks[--pressed], true, scan);
-        }
-        ml::State::Get().keyboardPassthrough.store(false);
-        if (complete)
-          LOG("Shortcut dispatched: %s", a.label.c_str());
-        else
-          LOG_ERR("Shortcut incomplete: %s", a.label.c_str());
-      } else
-        LOG_ERR("Shortcut cancelled: invalid binding, held modifiers, or game "
-                "lost focus.");
-    }
+    if (pending)
+      dispatchAction(action);
     Sleep(20);
   }
   return 0;
 }
-static void queueAction(const Action &a) {
+static bool queueAction(const Action &a) {
   std::lock_guard<std::mutex> lock(catalogMutex);
-  if (restartRequired.count(lower(a.module)))
-    return;
-  pendingAction = a;
-  hasPending = true;
+  constexpr size_t queueLimit = 8;
+  if (pendingActions.size() >= queueLimit || restartRequired.count(lower(a.module)))
+    return false;
+  pendingActions.push_back(a);
   if (!a.toggle)
     ml::State::Get().menuOpen = false;
+  return true;
 }
 namespace ml::gui {
 void InitStyle(float scale) {
@@ -399,13 +433,16 @@ void InitStyle(float scale) {
   char fonts[MAX_PATH];
   GetWindowsDirectoryA(fonts, MAX_PATH);
   std::string font = std::string(fonts) + "\\Fonts\\segoeui.ttf";
-  if (GetFileAttributesA(font.c_str()) != INVALID_FILE_ATTRIBUTES)
-    io.Fonts->AddFontFromFileTTF(font.c_str(), 17.0f * UI::scale);
+  if (GetFileAttributesA(font.c_str()) != INVALID_FILE_ATTRIBUTES) {
+    static const ImWchar ranges[] = {0x20, 0x024F, 0x0370, 0x052F, 0};
+    io.Fonts->AddFontFromFileTTF(font.c_str(), 17.0f * UI::scale, nullptr, ranges);
+  }
 }
 bool FontsNeedRebuild() { return false; }
 void RebuildFonts() {}
 void PollToggle() {
   static bool was = false;
+  static bool escapeWas = false;
   const auto code = opener.load();
   const bool now = held(code & 0xff) && heldModifiers() == (code & ~0xffu) &&
                    !held(VK_LWIN) && !held(VK_RWIN);
@@ -418,19 +455,23 @@ void PollToggle() {
         refreshRequested.store(true);
       lastLayout = layout;
     }
-    if (now && !was && !UI::recording) {
+    const bool textEditing = s.menuOpen && ImGui::GetIO().WantTextInput;
+    const bool acceptsShortcut = !UI::recording && !textEditing && !s.sendingShortcut;
+    if (now && !was && acceptsShortcut) {
       s.menuOpen = !s.menuOpen;
       if (s.menuOpen)
         refreshRequested.store(true);
     }
-    static bool escapeWas = false;
     const bool escape = held(VK_ESCAPE);
-    if (s.menuOpen && escape && !escapeWas && !UI::recording)
+    if (s.menuOpen && escape && !escapeWas && acceptsShortcut)
       s.menuOpen = false;
     escapeWas = escape;
   } else {
     s.menuOpen = false;
     UI::recording = 0;
+    escapeWas = held(VK_ESCAPE);
+    std::lock_guard<std::mutex> lock(catalogMutex);
+    pendingActions.clear();
   }
   was = now;
 }
@@ -438,20 +479,24 @@ bool WantsDraw() { return State::Get().menuOpen; }
 void FeedInput() {
   auto &s = State::Get();
   auto &io = ImGui::GetIO();
-  bool c = s.Captures();
+  const bool c = s.menuOpen.load();
   static bool old = false;
   io.MouseDrawCursor = c;
   if (c != old) {
     old = c;
     if (c)
       input::MenuOpened();
-    else
+    else {
       input::MenuClosed();
+      s.lastDrawAt.store(0);
+      io.ClearEventsQueue();
+      io.ClearInputKeys();
+      io.ClearInputMouse();
+      io.AddMousePosEvent(-FLT_MAX, -FLT_MAX);
+    }
   }
   if (c)
     input::FeedMouse(io);
-  else
-    io.AddMousePosEvent(-FLT_MAX, -FLT_MAX);
 }
 void Render() {
   auto &s = State::Get();
@@ -569,8 +614,7 @@ void Render() {
             ImGui::BeginDisabled(!module || managed || restart);
             if (ImGui::Button(a.toggle ? "Toggle" : "Open menu",
                               ImVec2(110 * u, 31 * u))) {
-              queueAction(a);
-              if (!a.toggle)
+              if (queueAction(a) && !a.toggle)
                 open = false;
             }
             ImGui::EndDisabled();
@@ -660,19 +704,21 @@ extern "C" __declspec(dllexport) int ModActivatorReliabilityTest() {
   {
     std::lock_guard<std::mutex> lock(catalogMutex);
     restartRequired.insert(lower(a.module));
-    hasPending = false;
+    pendingActions.clear();
   }
   queueAction(a);
-  if (hasPending)
+  if (!pendingActions.empty())
     return 7;
   {
     std::lock_guard<std::mutex> lock(catalogMutex);
     restartRequired.erase(lower(a.module));
   }
-  queueAction(a);
-  if (!hasPending)
+  Action next = a;
+  next.label = "Second shortcut";
+  if (!queueAction(a) || !queueAction(next) || pendingActions.size() != 2 ||
+      pendingActions.front().label != a.label || pendingActions.back().label != next.label)
     return 8;
-  hasPending = false;
+  pendingActions.clear();
   return 0;
 }
 extern "C" __declspec(dllexport) int
@@ -687,6 +733,7 @@ ModActivatorSettingsTest(const char *root) {
     Action probe{"Keyboard", "Keyboard.asi", "absent.ini", "Menu", "Hotkey"};
     const std::string umlaut = "\xc3\xb6";
     if (usSymbolForScan(scanForLocalizedSymbol(umlaut, gameKeyboardLayout())) != ';' ||
+        usSymbolForScan(scanForLocalizedSymbol("\xc3\xb1", gameKeyboardLayout())) != ';' ||
         usSymbolForScan(scanForUsSymbol(';')) != ';' ||
         usSymbolForScan(scanForUsSymbol(':')) != ';')
       return 1;
@@ -774,9 +821,9 @@ ModActivatorDiscoveryTest(const char *root, const char *modules, char *out,
   }
   std::string report;
   try {
-    for (auto &a : discover(names)) {
+    for (auto &a : selectActions(scanBindings(names))) {
       report += a.module + "|" + a.file + "|" + a.section + "|" + a.key + "|";
-      for (int k : keys(a))
+      for (int k : a.cachedKeys)
         report += std::to_string(k) + ",";
       report += "\n";
     }
@@ -809,9 +856,9 @@ ModActivatorToggleDiscoveryTest(const char *root, const char *modules,
   }
   std::string report;
   try {
-    for (auto &a : discover(names, true)) {
+    for (auto &a : selectActions(scanBindings(names), true)) {
       report += a.module + "|" + a.file + "|" + a.section + "|" + a.key + "|";
-      for (int k : keys(a))
+      for (int k : a.cachedKeys)
         report += std::to_string(k) + ",";
       report += "\n";
     }
@@ -866,7 +913,7 @@ extern "C" __declspec(dllexport) int ModActivatorResponsivenessTest() {
   queueAction(ui);
   if (s.menuOpen)
     return 2;
-  hasPending = false;
+  pendingActions.clear();
   std::vector<Action> old;
   {
     std::lock_guard<std::mutex> lock(catalogMutex);

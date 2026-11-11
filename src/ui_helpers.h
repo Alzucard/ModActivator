@@ -88,7 +88,7 @@ static std::vector<int> recordShortcut(const char *label) {
     recording = id;
     waitingForRelease = true;
   }
-  if (recording != id)
+  if (recording != id || ml::State::Get().sendingShortcut)
     return {};
   if (held(VK_ESCAPE)) {
     recording = 0;

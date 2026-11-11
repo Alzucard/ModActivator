@@ -5,11 +5,13 @@
 
 namespace ml
 {
+    inline constexpr ULONG_PTR shortcutInputTag = 0x4D414354;
+
     // Runtime flags shared by the render thread (menu), the window thread
     // (input) and the loot worker. Plain scalars only.
     struct State
     {
-        std::atomic<bool> keyboardPassthrough{false};
+        std::atomic<bool> sendingShortcut{false};
         std::atomic<bool> menuOpen{false};
         std::atomic<bool> menuWatch{false}; // menu drawn but every input goes to the game (watch mode)
         std::atomic<bool> textCapture{false}; // an ImGui text field has focus: every key belongs to the menu

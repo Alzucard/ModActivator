@@ -24,8 +24,10 @@ static std::string encodeBinding(const Action &a, std::string input,
   if (lower(a.file) == "reshade.ini")
     throw std::runtime_error("Change ReShade shortcuts in its own settings.");
   std::string original = read(a);
-  auto bar = original.find('|');
-  std::string base = trim(original.substr(0, (std::min)(bar, bindingComment(original))));
+  const auto comment = bindingComment(original);
+  const auto setting = trim(original.substr(0, comment));
+  const auto bar = setting.find('|');
+  const auto base = trim(setting.substr(0, bar));
   const bool numeric = !base.empty() && isdigit((unsigned char)base[0]) &&
                        base.find(',') == base.npos && !standaloneDigit(a, base);
   if (!recorded.empty()) {
@@ -50,6 +52,7 @@ static std::string encodeBinding(const Action &a, std::string input,
     }
   }
   if (recorded.empty()) {
+    input = compactShortcut(std::move(input));
     auto separator = input.find_last_of('+');
     if (input == "+")
       separator = input.npos;
@@ -99,24 +102,15 @@ static std::string encodeBinding(const Action &a, std::string input,
         converted.insert(converted.begin(), '0');
     }
   }
-  if (bar != original.npos)
-    converted += original.substr(bar);
+  if (bar != setting.npos)
+    converted += setting.substr(bar);
   auto ks = keysFrom(a, converted);
   if (!validShortcut(ks))
     throw std::runtime_error("Unsupported shortcut.");
-  std::set<int> seen;
-  for (int k : ks)
-    if (k < 8 || k > 254 || !seen.insert(k).second)
-      throw std::runtime_error("Unsupported or duplicate key.");
-  if (ks.back() == 16 || ks.back() == 17 || ks.back() == 18)
-    throw std::runtime_error("Choose a main key after modifiers.");
-  // Round-trip named syntax before saving; do not invent a format for unknown
-  // mods.
-  if (!numeric) {
-    for (int k : ks)
-      if (configKeyName(k).empty())
-        throw std::runtime_error("Unsupported key name.");
-  }
+  if (!numeric && configKeyName(ks.back()).empty())
+    throw std::runtime_error("Unsupported key name.");
+  if (!recorded.empty() && ks.back() != recorded.back())
+    throw std::runtime_error("This mod's shortcut format cannot represent the recorded key.");
   return converted;
 }
 static std::string replaceValue(const std::string &bytes, const Action &a,
@@ -167,7 +161,7 @@ static std::string replaceValue(const std::string &bytes, const Action &a,
   result.replace(begin, finish - begin, value);
   return result;
 }
-static void saveBinding(const Action &a, const std::string &expected,
+static bool saveBinding(const Action &a, const std::string &expected,
                         const std::string &value) {
   auto path =
       std::filesystem::weakly_canonical(std::filesystem::path(folder) / a.file);
@@ -181,6 +175,8 @@ static void saveBinding(const Action &a, const std::string &expected,
     throw std::runtime_error(
         "Config changed since editing began. Select it again.");
   auto updated = replaceValue(current, a, value);
+  if (updated == current)
+    return false;
   auto backup = path.string() + ".modactivator.bak";
   if (!std::filesystem::exists(backup) &&
       !CopyFileA(path.string().c_str(), backup.c_str(), TRUE))
@@ -200,9 +196,12 @@ static void saveBinding(const Action &a, const std::string &expected,
     DeleteFileA(temporary.c_str());
     throw std::runtime_error("Config write failed.");
   }
-  if (readBytes(path.string()) != expected) {
+  try {
+    if (readBytes(path.string()) != expected)
+      throw std::runtime_error("Config changed while saving.");
+  } catch (...) {
     DeleteFileA(temporary.c_str());
-    throw std::runtime_error("Config changed while saving.");
+    throw;
   }
   if (!ReplaceFileA(path.string().c_str(), temporary.c_str(), nullptr, 0,
                     nullptr, nullptr)) {
@@ -210,6 +209,7 @@ static void saveBinding(const Action &a, const std::string &expected,
     throw std::runtime_error("Could not replace config. Original preserved.");
   }
   WritePrivateProfileStringA(nullptr, nullptr, nullptr, path.string().c_str());
+  return true;
 }
 static void drawHotkeys() {
   static Action editing;
@@ -219,6 +219,7 @@ static void drawHotkeys() {
   static std::string snapshot, message;
   static bool acknowledge = false;
   static std::string lastInput, encodedCache, validationError;
+  static HKL lastLayout = nullptr;
   static std::vector<int> proposedCache;
   std::vector<Action> list;
   {
@@ -272,8 +273,9 @@ static void drawHotkeys() {
                             selected && identity(a) == identity(editing),
                             ImGuiSelectableFlags_SpanAllColumns)) {
         try {
+          auto selectedSnapshot = readBytes(folder + a.file);
           editing = a;
-          snapshot = readBytes(folder + a.file);
+          snapshot = std::move(selectedSnapshot);
           selected = true;
           entry[0] = 0;
           recorded.clear();
@@ -305,6 +307,16 @@ static void drawHotkeys() {
   }
   if (selected) {
     ImGui::BeginChild("ShortcutEditor");
+    const auto layout = gameKeyboardLayout();
+    if (layout != lastLayout) {
+      lastLayout = layout;
+      lastInput = "\x01";
+      acknowledge = false;
+      if (!recorded.empty()) {
+        recorded.clear();
+        message = "Keyboard layout changed. Record the shortcut again.";
+      }
+    }
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
@@ -356,6 +368,9 @@ static void drawHotkeys() {
         throw std::runtime_error(validationError);
       const auto &encoded = encodedCache;
       const auto &proposed = proposedCache;
+      if (!recorded.empty() && proposed != recorded)
+        ImGui::TextWrapped("Saved shortcut with existing modifier settings: %s",
+                           shortcutLabel(proposed).c_str());
       const auto ownKeys = openerKeys();
       bool clashes = conflict(proposed, ownKeys) != 0;
       for (auto &a : list)
@@ -373,15 +388,19 @@ static void drawHotkeys() {
       ImGui::BeginDisabled(clashes && !acknowledge);
       if (ImGui::Button("Save hotkey")) {
         try {
-          saveBinding(editing, snapshot, encoded);
-          message =
-              "Saved with .modactivator.bak backup. Restart the game to apply.";
-          selected = false;
+          bool changed;
           {
             std::lock_guard<std::mutex> lock(catalogMutex);
-            restartRequired.insert(lower(editing.module));
+            changed = saveBinding(editing, snapshot, encoded);
+            if (changed)
+              restartRequired.insert(lower(editing.module));
           }
-          refreshRequested.store(true);
+          message = changed
+                        ? "Saved with .modactivator.bak backup. Restart the game to apply."
+                        : "Shortcut is already set to that value.";
+          selected = false;
+          if (changed)
+            refreshRequested.store(true);
         } catch (const std::exception &e) {
           message = e.what();
         }
