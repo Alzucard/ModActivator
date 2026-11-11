@@ -974,7 +974,7 @@ namespace ml::hooks
     // Returns whether a frame was actually submitted (for the post-present device
     // check). isGameFacing is false for native presents while a wrapper owns the
     // drawing - those are Streamline's read-only finished frames, left untouched.
-    static bool RenderOverlay(IDXGISwapChain3* swapChain, bool isGameFacing, UINT flags,
+    static bool RenderOverlayFrame(IDXGISwapChain3* swapChain, bool isGameFacing, UINT flags,
                               ID3D12CommandQueue* presentQueue = nullptr)
     {
         // Counted before anything can refuse: every path that could draw comes
@@ -1070,6 +1070,22 @@ namespace ml::hooks
             State::Get().menuOpen = false;
         }
         return drew;
+    }
+
+    static bool RenderOverlay(IDXGISwapChain3* swapChain, bool isGameFacing, UINT flags,
+                              ID3D12CommandQueue* presentQueue = nullptr)
+    {
+        // A second swapchain can present while the first is still drawing.
+        // Skip that frame rather than accessing the same ImGui context twice.
+        static std::atomic_flag busy = ATOMIC_FLAG_INIT;
+        if (busy.test_and_set(std::memory_order_acquire))
+            return false;
+        struct UnlockOnReturn
+        {
+            std::atomic_flag& flag;
+            ~UnlockOnReturn() { flag.clear(std::memory_order_release); }
+        } unlock{busy};
+        return RenderOverlayFrame(swapChain, isGameFacing, flags, presentQueue);
     }
 
     // On a device removal, dump DRED (Device Removed Extended Data): the GPU

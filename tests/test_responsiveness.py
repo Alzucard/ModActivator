@@ -21,3 +21,7 @@ print("PASS: mouse drag reorders cards, saves the result, and supports moving ba
 result = m.ModActivatorGroupsTest()
 assert result == 0, f'Grouped bindings regression check failed at step {result}'
 print("PASS: groups collapse by default, expand on search, and keep related bindings together.")
+
+result = m.ModActivatorInputQueueTest()
+assert result == 0, f'Input queue regression check failed at step {result}'
+print("PASS: window-thread input is handed off in order, and menu close and overflow discard stale input.")

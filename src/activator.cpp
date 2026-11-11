@@ -499,7 +499,7 @@ void FeedInput() {
     }
   }
   if (c)
-    input::FeedMouse(io);
+    input::FeedInput(io);
 }
 void Render() {
   auto &s = State::Get();

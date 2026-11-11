@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.3.1
+- Queue Windows input for the render thread to prevent a crash when typing or pressing hotkeys in the overlay.
+- Preserve event order for keyboard, text, mouse buttons, and wheel input.
+
 ## 1.2.3
 - Group bindings by mod in Hotkeys and Mod placement, with collapsible headings.
 - Show INI descriptions in a What it does column and retain complete comment blocks in tooltips.

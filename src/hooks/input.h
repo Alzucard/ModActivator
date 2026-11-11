@@ -6,7 +6,7 @@ struct ImGuiIO;
 namespace ml::input
 {
     // Subclasses the game window. While the menu is open, keyboard and mouse
-    // messages go to ImGui and are withheld from the game (key releases still
+    // messages are queued for ImGui and withheld from the game (key releases still
     // pass so nothing sticks).
     //
     // The menu's cursor is virtual. The game clips the OS cursor to a point,
@@ -20,9 +20,8 @@ namespace ml::input
 
     void MenuOpened();   // centres the virtual cursor
     void MenuClosed();
-    // Render thread, once per frame while the menu is open: hands ImGui the
-    // virtual cursor position and any raw-input button state.
-    void FeedMouse(ImGuiIO& io);
+    // Render thread, before ImGui::NewFrame: submit the cursor and queued input.
+    void FeedInput(ImGuiIO& io);
     // The size of the target the menu is drawn into, which is the swapchain's
     // and not always the window's. The virtual cursor is kept in window
     // coordinates, because that is what the raw deltas and the OS cursor are

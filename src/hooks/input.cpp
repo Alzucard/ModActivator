@@ -2,13 +2,16 @@
 
 #include <MinHook.h>
 #include <imgui.h>
-#include <imgui_impl_win32.h>
+#include <imgui_internal.h>
+#include <algorithm>
+#include <array>
 #include <vector>
 
 #include "../core/log.h"
 #include "../core/state.h"
 
-extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
+// This backend helper only translates the message. It does not access ImGui state.
+extern ImGuiKey ImGui_ImplWin32_KeyEventToImGuiKey(WPARAM, LPARAM);
 
 namespace ml::input
 {
@@ -21,8 +24,22 @@ namespace ml::input
     static float g_vx = 0, g_vy = 0;         // client coordinates
     static bool  g_centered = false;
     static bool  g_rawButtons = false;       // the game asked for no legacy button messages
-    static int   g_pendingButtons[5][2];     // per button: down count, up count since last feed
-    static float g_pendingWheel = 0;
+    enum class InputKind { Key, Character, MouseButton, Wheel, Focus };
+    struct PendingInput
+    {
+        InputKind kind;
+        WPARAM value;
+        LPARAM data;
+        unsigned modifiers = 0;
+        bool down = false;
+    };
+    static std::array<PendingInput, 512> g_pending;
+    static size_t g_pendingCount = 0;
+    static bool g_inputOverflow = false;
+    static bool g_acceptInput = false;
+    // Only the window thread uses this state.
+    static unsigned g_legacyButtons = 0;
+    static bool g_ownsCapture = false;
     static bool  g_weRegistered = false;
 
     // --- cursor diagnostics -------------------------------------------------
@@ -41,6 +58,71 @@ namespace ml::input
 
     static void Lock()   { EnterCriticalSection(&g_cs); }
     static void Unlock() { LeaveCriticalSection(&g_cs); }
+
+    static void PushInputLocked(const PendingInput& event)
+    {
+        if (!g_acceptInput)
+            return;
+        if (g_pendingCount == g_pending.size())
+        {
+            g_inputOverflow = true;
+            return;
+        }
+        g_pending[g_pendingCount++] = event;
+    }
+
+    static void QueueInput(const PendingInput& event)
+    {
+        Lock();
+        PushInputLocked(event);
+        Unlock();
+    }
+
+    static void ResetInputLocked(bool accepting)
+    {
+        g_acceptInput = accepting;
+        g_pendingCount = 0;
+        g_inputOverflow = false;
+    }
+
+    static void SubmitInput(ImGuiIO& io, const PendingInput& event)
+    {
+        switch (event.kind)
+        {
+        case InputKind::Key:
+        {
+            io.AddKeyEvent(ImGuiMod_Ctrl, (event.modifiers & 1) != 0);
+            io.AddKeyEvent(ImGuiMod_Shift, (event.modifiers & 2) != 0);
+            io.AddKeyEvent(ImGuiMod_Alt, (event.modifiers & 4) != 0);
+            io.AddKeyEvent(ImGuiMod_Super, (event.modifiers & 8) != 0);
+            const auto key = ImGui_ImplWin32_KeyEventToImGuiKey(event.value, event.data);
+            if (key == ImGuiKey_None)
+                break;
+            // Windows may only send the release for Print Screen.
+            if (key == ImGuiKey_PrintScreen && !event.down)
+                io.AddKeyEvent(key, true);
+            io.AddKeyEvent(key, event.down);
+            io.SetKeyEventNativeData(key, static_cast<int>(event.value),
+                                    LOBYTE(HIWORD(event.data)));
+            break;
+        }
+        case InputKind::Character:
+            io.AddInputCharacterUTF16(static_cast<unsigned short>(event.value));
+            break;
+        case InputKind::MouseButton:
+            io.AddMouseButtonEvent(static_cast<int>(event.value), event.down);
+            break;
+        case InputKind::Wheel:
+        {
+            const float delta = static_cast<short>(event.value) / static_cast<float>(WHEEL_DELTA);
+            io.AddMouseWheelEvent(event.data ? -delta : 0, event.data ? 0 : delta);
+            break;
+        }
+        case InputKind::Focus:
+            io.AddFocusEvent(event.down);
+            break;
+        }
+    }
 
     // Zero until the render path has a swapchain, which means no scaling.
     static float g_ovW = 0.0f, g_ovH = 0.0f;
@@ -89,31 +171,44 @@ namespace ml::input
             static const USHORT up[5]   = { RI_MOUSE_LEFT_BUTTON_UP,   RI_MOUSE_RIGHT_BUTTON_UP,   RI_MOUSE_MIDDLE_BUTTON_UP,   RI_MOUSE_BUTTON_4_UP,   RI_MOUSE_BUTTON_5_UP };
             for (int b = 0; b < 5; ++b)
             {
-                if (m.usButtonFlags & down[b]) ++g_pendingButtons[b][0];
-                if (m.usButtonFlags & up[b])   ++g_pendingButtons[b][1];
+                if (m.usButtonFlags & down[b])
+                    PushInputLocked({InputKind::MouseButton, static_cast<WPARAM>(b), 0, 0, true});
+                if (m.usButtonFlags & up[b])
+                    PushInputLocked({InputKind::MouseButton, static_cast<WPARAM>(b), 0});
             }
-            if (m.usButtonFlags & RI_MOUSE_WHEEL) g_pendingWheel += static_cast<short>(m.usButtonData) / static_cast<float>(WHEEL_DELTA);
+            if (m.usButtonFlags & RI_MOUSE_WHEEL)
+                PushInputLocked({InputKind::Wheel, m.usButtonData, 0});
+            if (m.usButtonFlags & RI_MOUSE_HWHEEL)
+                PushInputLocked({InputKind::Wheel, m.usButtonData, 1});
         }
         Unlock();
     }
 
-    void FeedMouse(ImGuiIO& io)
+    void FeedInput(ImGuiIO& io)
     {
         int cw = 0, chh = 0;
         ClientSize(&cw, &chh);
         const float sx = (g_ovW > 0.0f && cw > 0) ? g_ovW / static_cast<float>(cw) : 1.0f;
         const float sy = (g_ovH > 0.0f && chh > 0) ? g_ovH / static_cast<float>(chh) : 1.0f;
+        std::array<PendingInput, g_pending.size()> batch;
         Lock();
-        io.AddMousePosEvent(g_vx * sx, g_vy * sy);
-        for (int b = 0; b < 5; ++b)
-        {
-            for (int i = 0; i < g_pendingButtons[b][0]; ++i) io.AddMouseButtonEvent(b, true);
-            for (int i = 0; i < g_pendingButtons[b][1]; ++i) io.AddMouseButtonEvent(b, false);
-            g_pendingButtons[b][0] = g_pendingButtons[b][1] = 0;
-        }
-        if (g_pendingWheel != 0) { io.AddMouseWheelEvent(0, g_pendingWheel); g_pendingWheel = 0; }
         const float vx = g_vx, vy = g_vy;
+        const bool overflow = g_inputOverflow;
+        const auto count = overflow ? 0 : g_pendingCount;
+        std::copy_n(g_pending.begin(), count, batch.begin());
+        ResetInputLocked(g_acceptInput);
         Unlock();
+
+        // The window thread never accesses the ImGui context or its event queue.
+        if (overflow)
+        {
+            io.ClearEventsQueue();
+            io.ClearInputKeys();
+            io.ClearInputMouse();
+        }
+        io.AddMousePosEvent(vx * sx, vy * sy);
+        for (size_t i = 0; i < count; ++i)
+            SubmitInput(io, batch[i]);
 
         // The first few seconds of each opening, which is where a cursor fault
         // shows. Three lines rather than one: the first can catch the menu
@@ -261,24 +356,128 @@ namespace ml::input
         int w, h; ClientSize(&w, &h);
         Lock();
         g_vx = w * 0.5f; g_vy = h * 0.5f;
-        for (auto& b : g_pendingButtons) b[0] = b[1] = 0;
-        g_pendingWheel = 0;
+        ResetInputLocked(true);
         Unlock();
         g_centered = true;
         ReportOnOpen(w, h);
     }
-    void MenuClosed() {}
+    void MenuClosed()
+    {
+        Lock();
+        ResetInputLocked(false);
+        Unlock();
+    }
 
     // --- window procedure ---------------------------------------------------
     static bool IsMouse(UINT m)    { return m >= WM_MOUSEFIRST && m <= WM_MOUSELAST; }
     static bool IsKeyboard(UINT m) { return m == WM_KEYDOWN || m == WM_KEYUP || m == WM_SYSKEYDOWN || m == WM_SYSKEYUP || m == WM_CHAR || m == WM_SYSCHAR; }
+
+    static bool KeyDown(int key)
+    {
+        return (GetKeyState(key) & 0x8000) != 0;
+    }
+
+    static void QueueKeyboard(HWND hwnd, UINT msg, WPARAM key, LPARAM data)
+    {
+        if (msg == WM_CHAR)
+        {
+            if (!IsWindowUnicode(hwnd))
+            {
+                wchar_t decoded = 0;
+                const char byte = static_cast<char>(key);
+                const auto layout = reinterpret_cast<ULONG_PTR>(GetKeyboardLayout(0));
+                DWORD page = CP_ACP;
+                GetLocaleInfoW(MAKELCID(LOWORD(layout), SORT_DEFAULT),
+                               LOCALE_IDEFAULTANSICODEPAGE | LOCALE_RETURN_NUMBER,
+                               reinterpret_cast<wchar_t*>(&page), sizeof(page) / sizeof(wchar_t));
+                if (MultiByteToWideChar(page, 0, &byte, 1, &decoded, 1) != 1)
+                    return;
+                key = decoded;
+            }
+            if (key > 0 && key < 0x10000)
+                QueueInput({InputKind::Character, key, 0});
+            return;
+        }
+        if (msg == WM_SYSCHAR || key >= 256)
+            return;
+
+        const unsigned mods = (KeyDown(VK_CONTROL) ? 1u : 0u) |
+                              (KeyDown(VK_SHIFT) ? 2u : 0u) |
+                              (KeyDown(VK_MENU) ? 4u : 0u) |
+                              ((KeyDown(VK_LWIN) || KeyDown(VK_RWIN)) ? 8u : 0u);
+        const bool extended = (HIWORD(data) & KF_EXTENDED) != 0;
+        if (key == VK_SHIFT)
+            key = MapVirtualKeyW(LOBYTE(HIWORD(data)), MAPVK_VSC_TO_VK_EX);
+        else if (key == VK_CONTROL)
+            key = extended ? VK_RCONTROL : VK_LCONTROL;
+        else if (key == VK_MENU)
+            key = extended ? VK_RMENU : VK_LMENU;
+        QueueInput({InputKind::Key, key, data, mods, msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN});
+    }
+
+    static void QueueLegacyMouse(HWND hwnd, UINT msg, WPARAM wParam, bool capturing)
+    {
+        if (msg == WM_MOUSEWHEEL || msg == WM_MOUSEHWHEEL)
+        {
+            if (capturing)
+                QueueInput({InputKind::Wheel, HIWORD(wParam), msg == WM_MOUSEHWHEEL});
+            return;
+        }
+        int button;
+        switch (msg)
+        {
+        case WM_LBUTTONDOWN: case WM_LBUTTONDBLCLK: case WM_LBUTTONUP: button = 0; break;
+        case WM_RBUTTONDOWN: case WM_RBUTTONDBLCLK: case WM_RBUTTONUP: button = 1; break;
+        case WM_MBUTTONDOWN: case WM_MBUTTONDBLCLK: case WM_MBUTTONUP: button = 2; break;
+        case WM_XBUTTONDOWN: case WM_XBUTTONDBLCLK: case WM_XBUTTONUP:
+            button = GET_XBUTTON_WPARAM(wParam) == XBUTTON1 ? 3 : 4;
+            break;
+        default: return;
+        }
+        const bool down = msg != WM_LBUTTONUP && msg != WM_RBUTTONUP &&
+                          msg != WM_MBUTTONUP && msg != WM_XBUTTONUP;
+        if (down && capturing)
+        {
+            g_legacyButtons |= 1u << button;
+            if (!GetCapture())
+            {
+                SetCapture(hwnd);
+                g_ownsCapture = GetCapture() == hwnd;
+            }
+        }
+        else if (!down)
+        {
+            g_legacyButtons &= ~(1u << button);
+            if (!g_legacyButtons && g_ownsCapture)
+            {
+                g_ownsCapture = false;
+                if (GetCapture() == hwnd)
+                    ReleaseCapture();
+            }
+        }
+        if (capturing)
+            QueueInput({InputKind::MouseButton, static_cast<WPARAM>(button), 0, 0, down});
+    }
 
     static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     {
         if (msg == WM_INPUT)          InterlockedIncrement(&g_dbgInput);
         else if (msg == WM_MOUSEMOVE) InterlockedIncrement(&g_dbgMove);
         else if (IsMouse(msg))        InterlockedIncrement(&g_dbgButton);
-        if (State::Get().Captures())
+        const bool capturing = State::Get().Captures();
+        if (msg == WM_CAPTURECHANGED)
+        {
+            for (int button = 0; button < 5; ++button)
+                if (g_legacyButtons & (1u << button))
+                    QueueInput({InputKind::MouseButton, static_cast<WPARAM>(button), 0});
+            g_legacyButtons = 0;
+            g_ownsCapture = false;
+        }
+        if (capturing && (msg == WM_SETFOCUS || msg == WM_KILLFOCUS))
+            QueueInput({InputKind::Focus, 0, 0, 0, msg == WM_SETFOCUS});
+        if (!g_rawButtons && IsMouse(msg))
+            QueueLegacyMouse(hwnd, msg, wParam, capturing);
+        if (capturing)
         {
             if (msg == WM_INPUT)
             {
@@ -297,15 +496,12 @@ namespace ml::input
             if (msg == WM_MOUSEMOVE || msg == WM_NCMOUSEMOVE || msg == WM_MOUSELEAVE || msg == WM_NCMOUSELEAVE)
                 return 0; // the OS cursor position is meaningless here; the virtual cursor is fed each frame
             if (IsMouse(msg))
-            {
-                if (!g_rawButtons) ImGui_ImplWin32_WndProcHandler(hwnd, msg, wParam, lParam); // buttons and wheel
                 return 0;
-            }
             if (IsKeyboard(msg))
             {
                 if (static_cast<ULONG_PTR>(GetMessageExtraInfo()) == shortcutInputTag)
                     return CallWindowProc(g_original, hwnd, msg, wParam, lParam);
-                ImGui_ImplWin32_WndProcHandler(hwnd, msg, wParam, lParam);
+                QueueKeyboard(hwnd, msg, wParam, lParam);
                 // Releases reach the game so a key held when the menu opened does not stick.
                 if (msg == WM_KEYUP || msg == WM_SYSKEYUP)
                     return CallWindowProc(g_original, hwnd, msg, wParam, lParam);
@@ -346,5 +542,78 @@ namespace ml::input
             g_original = nullptr;
             g_hwnd = nullptr;
         }
+    }
+
+    extern "C" __declspec(dllexport) int ModActivatorInputQueueTest()
+    {
+        if (g_csReady)
+            return -1;
+        InitializeCriticalSection(&g_cs);
+        auto *context = ImGui::CreateContext();
+        auto &io = ImGui::GetIO();
+        g_dbgLines = 3;
+        ResetInputLocked(true);
+
+        const HANDLE producer = CreateThread(nullptr, 0, [](void*) -> DWORD {
+            QueueInput({InputKind::Key, 'A', 0, 7, true});
+            QueueInput({InputKind::Character, 0xF6, 0});
+            QueueInput({InputKind::MouseButton, 0, 0, 0, true});
+            QueueInput({InputKind::MouseButton, 0, 0});
+            QueueInput({InputKind::Wheel, WHEEL_DELTA, 0});
+            QueueInput({InputKind::Key, 'A', 0, 7, false});
+            return 0;
+        }, nullptr, 0, nullptr);
+
+        int result = 0;
+        if (!producer)
+        {
+            result = 1;
+        }
+        else
+        {
+            WaitForSingleObject(producer, INFINITE);
+            CloseHandle(producer);
+            if (context->InputEventsQueue.Size != 0)
+                result = 2;
+            FeedInput(io);
+
+            std::vector<int> received;
+            for (const auto &event : context->InputEventsQueue)
+            {
+                if (event.Type == ImGuiInputEventType_Key && event.Key.Down)
+                    received.push_back(event.Key.Key);
+                else if (event.Type == ImGuiInputEventType_Key && event.Key.Key == ImGuiKey_A)
+                    received.push_back(-ImGuiKey_A);
+                else if (event.Type == ImGuiInputEventType_Text)
+                    received.push_back(event.Text.Char);
+                else if (event.Type == ImGuiInputEventType_MouseButton)
+                    received.push_back(event.MouseButton.Down ? 1 : -1);
+                else if (event.Type == ImGuiInputEventType_MouseWheel)
+                    received.push_back(static_cast<int>(event.MouseWheel.WheelY));
+            }
+            const std::vector<int> expected{ImGuiMod_Ctrl, ImGuiMod_Shift, ImGuiMod_Alt,
+                                            ImGuiKey_A, 0xF6, 1, -1, 1, -ImGuiKey_A};
+            if (!result && received != expected)
+                result = 3;
+        }
+
+        MenuClosed();
+        QueueInput({InputKind::Character, 'x', 0});
+        if (!result && g_pendingCount)
+            result = 4;
+        ResetInputLocked(true);
+        for (size_t i = 0; i <= g_pending.size(); ++i)
+            QueueInput({InputKind::Character, 'x', 0});
+        FeedInput(io);
+        if (!result && (g_inputOverflow || g_pendingCount ||
+            std::any_of(context->InputEventsQueue.begin(), context->InputEventsQueue.end(),
+                        [](const ImGuiInputEvent &e) { return e.Type == ImGuiInputEventType_Text; })))
+            result = 5;
+
+        ResetInputLocked(false);
+        ImGui::DestroyContext(context);
+        DeleteCriticalSection(&g_cs);
+        g_dbgLines = 0;
+        return result;
     }
 }
