@@ -40,6 +40,13 @@ struct Action {
   int menuRank = 0;
   int featureRank = 0;
   std::string description;
+  // Where description came from (a DescriptionSource in descriptions.h), and
+  // the names the description sources gave: the binding's own, and the mod's
+  // with a one-line summary of it. Empty means work one out from the key.
+  int descriptionSource = 0;
+  std::string customName, modName, modAbout;
+  // The mod writes bare key codes in hexadecimal (73 is F4).
+  bool hexNumbers = false;
   // Strings the menu derives from the fields above, filled on first use and
   // reused every frame after. Empty means not computed yet. The fields they
   // come from are not changed once an Action is shown.
@@ -259,6 +266,11 @@ static std::vector<int> keysFrom(const Action &a, std::string s,
   if (comment != std::string::npos)
     s.resize(comment);
   s = s.substr(0, s.find('|'));
+  // A mod that writes its codes in hex without the 0x: 73 is F4, not I.
+  // A lone letter is still that letter's key.
+  if (a.hexNumbers && !s.empty() && s.size() <= 2 && isdigit((unsigned char)s[0]) &&
+      s.find_first_not_of("0123456789abcdefABCDEF") == s.npos)
+    s = "0x" + s;
   std::vector<int> out;
   for (auto pair : {std::pair<const char *, int>{"RequireCtrl", 17},
                     {"RequireShift", 16},
@@ -1189,6 +1201,66 @@ ModActivatorDiscoveryTest(const char *root, const char *modules, char *out, int 
 extern "C" __declspec(dllexport) int
 ModActivatorToggleDiscoveryTest(const char *root, const char *modules, char *out, int capacity) {
   return discoveryReport(root, modules, out, capacity, true);
+}
+// Every binding found, with what the description sources made of it:
+// file|section|key|vk,..|name|mod name|source|menu rank|feature rank|description
+// (newlines in descriptions written as \n).
+extern "C" __declspec(dllexport) int
+ModActivatorDescribeTest(const char *root, const char *modules, char *out, int capacity) {
+  if (!folder.empty() || !root || !modules || !out || capacity < 1)
+    return -1;
+  folder = root;
+  std::vector<std::string> names;
+  std::stringstream list(modules);
+  for (std::string name; std::getline(list, name, ';');)
+    names.push_back(name);
+  std::string report;
+  try {
+    for (const auto &a : scanBindings(names)) {
+      auto description = a.description;
+      for (size_t at; (at = description.find('\n')) != description.npos;)
+        description.replace(at, 1, "\\n");
+      report += a.file + "|" + a.section + "|" + a.key + "|";
+      for (int k : a.cachedKeys)
+        report += std::to_string(k) + ",";
+      report += "|" + UI::actionName(a) + "|" + UI::name(a) + "|" +
+                std::to_string(a.descriptionSource) + "|" + std::to_string(a.menuRank) + "|" +
+                std::to_string(a.featureRank) + "|" + description + "\n";
+    }
+    // A mod that writes key codes in hex gets them written back in hex.
+    Action hex{"Hex", "Hex.asi", "Hex.ini", "Hotkeys", "PrivateHotkey"};
+    hex.hexNumbers = true;
+    if (keysFrom(hex, "73") != std::vector<int>{0x73} || keysFrom(hex, "7A") != std::vector<int>{0x7A} ||
+        keysFrom(hex, "A") != std::vector<int>{'A'}) {
+      folder.clear();
+      return -4;
+    }
+    std::ofstream(folder + "Hex.ini") << "[Hotkeys]\nPrivateHotkey=73\n";
+    if (encodeBinding(hex, "F6") != "75" || encodeBinding(hex, "", {VK_F7}) != "76") {
+      folder.clear();
+      return -5;
+    }
+  } catch (...) {
+    folder.clear();
+    return -2;
+  }
+  folder.clear();
+  if ((int)report.size() >= capacity)
+    return -3;
+  memcpy(out, report.c_str(), report.size() + 1);
+  return (int)report.size();
+}
+// The test build describes one of its own fixture bindings, so the mod
+// export is read end to end: tests/test_descriptions.py puts a config named
+// after this DLL beside the fixtures.
+extern "C" __declspec(dllexport) const ModActivatorBindingV1 *ModActivatorBindingsV1(unsigned *count) {
+  static const ModActivatorBindingV1 bindings[] = {
+      {"ModActivator-tests.ini", "Hotkeys", "SecretKey", "Exported name",
+       "Described by the mod itself.", ModActivatorKindToggle},
+      {nullptr, nullptr, "", "ignored", "an entry without a key is skipped", ModActivatorKindMenu},
+  };
+  *count = sizeof bindings / sizeof bindings[0];
+  return bindings;
 }
 extern "C" __declspec(dllexport) int
 ModActivatorEditorTest(const char *root, const char *file, const char *sec,

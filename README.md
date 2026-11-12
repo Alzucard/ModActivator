@@ -10,14 +10,14 @@ The panel uses a charcoal-and-gold theme with larger text, searchable mod cards,
 
 - **Mod UIs:** one automatically detected menu shortcut per loaded mod.
 - **Toggles:** controls for toggle-only mods. The panel stays open when sending a toggle. State is labeled **State unavailable** where a mod has no live-state interface.
-- **Hotkeys:** expand a mod to see its shortcuts and INI descriptions. Capture new key combinations in a single field, with config backups. Exact conflicts are red; shared base keys with different modifiers are amber.
+- **Hotkeys:** expand a mod to see its shortcuts and what each one does, with your own names and notes. Capture new key combinations in a single field, with config backups. Exact conflicts are red; shared base keys with different modifiers are amber.
 - **Settings:** change the panel shortcut, manage tabs, choose each mod’s tab, and correct binding types.
 - **On-demand discovery:** scans when the panel opens, when you click **Refresh**, and after saving an edit. No periodic five-second scan.
 - Config reads and conflict calculations are cached outside normal menu rendering.
 
 ## Install
 
-Close Crimson Desert. Copy `ModActivator.asi` and `ModActivator.ini` into the game's `bin64` folder, beside `CrimsonDesert.exe`. An ASI loader is required.
+Close Crimson Desert. Copy `ModActivator.asi`, `ModActivator.ini` and `ModActivator.KnownMods.ini` into the game's `bin64` folder, beside `CrimsonDesert.exe`. An ASI loader is required.
 
 Launch the game and press **Ctrl+Shift+Backspace**. Keep your existing INI when updating.
 
@@ -27,7 +27,21 @@ With ReShade 6.8.0 or newer, ModActivator draws through ReShade's add-on callbac
 
 ## Binding types
 
-ModActivator uses shortcut names and nearby INI comments to identify menu openers and feature toggles. To correct a guess, open **Settings → Mod placement** and set **Show as** to **Menu**, **Toggle**, or **Hotkeys only**. **Automatic** clears the override. These choices are saved in ModActivator.ini and apply immediately. The action label comes from the original INI key. Hotkeys and Mod placement show an INI description preview when available. Hover over a binding to see its exact key and the full comment. The binding must first be detectable by the existing keyboard shortcut scan.
+ModActivator uses shortcut names and nearby INI comments to identify menu openers and feature toggles. To correct a guess, open **Settings → Mod placement** and set **Show as** to **Menu**, **Toggle**, or **Hotkeys only**. **Automatic** clears the override. These choices are saved in ModActivator.ini and apply immediately. Hotkeys and Mod placement show a description preview when one is available (see below). Hover over a binding to see its exact key and the full description.
+
+## What a shortcut does
+
+Each binding's name and description come from the most trustworthy source that has one. Hover over a binding to see which:
+
+1. **Your own name and note.** Select a binding in **Hotkeys**, fill in **Name** and **Note**, and click **Save name and note**. They take effect at once, are saved in ModActivator.ini, and survive mod updates. **Clear mine** goes back to the other sources.
+2. **The mod itself**, for mods that describe their shortcuts to ModActivator (see below).
+3. **`ModActivator.KnownMods.ini`**, a list of what the shortcuts of about 60 popular Crimson Desert mods do, written from their Nexus Mods pages and config files. It also tells ModActivator about settings whose names do not look like shortcuts, and about mods that write key codes in hexadecimal. It is replaced on update; put your own changes in your notes instead.
+4. **The comment** beside the setting in the mod's config file.
+5. **A readme** next to the mod's config file: a `.txt` or `.md` file named `readme…` or after the mod.
+
+Without any of these, the name is worked out from the setting's key, such as `StanceCycleKey` → "Stance Cycle". A source that says whether a shortcut opens a menu, toggles something or is a plain action also decides its tab, unless you chose **Show as** yourself.
+
+**For mod authors:** export one function, `ModActivatorBindingsV1`, and ModActivator shows your names, descriptions and tabs for your shortcuts. `include/ModActivatorBindings.h` has the whole interface and an example. It needs nothing else, and your mod works the same without ModActivator.
 
 ## Hotkey edits
 
@@ -43,7 +57,7 @@ Use **Record opener** and **Save opener** to change ModActivator’s shortcut im
 
 ## Discovery and compatibility
 
-Discovery matches loaded ASI/addon64 modules to INI filenames or matching parent folders, up to two subfolder levels deep. ReShade's INI is listed only while ReShade is loaded, whatever its DLL is called; it is recognised by its add-on export. Missing, disabled, hardcoded, non-INI, or unrecognized bindings may be omitted. There is no fixed mod list or guessed shortcut fallback.
+Discovery matches loaded ASI/addon64 modules to INI filenames or matching parent folders, up to two subfolder levels deep. ReShade's INI is listed only while ReShade is loaded, whatever its DLL is called; it is recognised by its add-on export. Missing, disabled, hardcoded, non-INI, or unrecognized bindings may be omitted. Shortcuts are only ever read from the mods' own config files: the known-mods list describes them, it never invents one.
 
 Mods whose menus are controlled by ModHub are marked accordingly and must be opened through ModHub. The plugin sends shortcuts; it does not load or unload other ASIs. A dispatched shortcut is not proof that the destination mod acted on it. Toggle states cannot be universally inferred.
 
@@ -56,6 +70,7 @@ Requires Python 3.10+ and [LLVM-MinGW](https://github.com/mstorsjo/llvm-mingw). 
 ```powershell
 python scripts/build.py --toolchain C:\Tools\llvm-mingw-20261104-ucrt-x86_64
 python tests/test_discovery.py
+python tests/test_descriptions.py
 python tests/test_editor.py
 python tests/test_responsiveness.py
 python tests/test_text.py
@@ -67,7 +82,7 @@ Automated checks cover parsing, discovery, config editing and preservation, back
 
 ## Uninstall
 
-With the game closed, remove `ModActivator.asi` and `ModActivator.ini`. Restore edited configs from their backups if needed; uninstalling does not undo previous hotkey edits.
+With the game closed, remove `ModActivator.asi`, `ModActivator.ini` and `ModActivator.KnownMods.ini`. Restore edited configs from their backups if needed; uninstalling does not undo previous hotkey edits.
 
 ## Credits
 

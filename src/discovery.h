@@ -284,6 +284,7 @@ static bool representableInAnsi(const std::wstring &wide) {
                                     (int)wide.size(), nullptr, 0, nullptr, &lossy);
   return n > 0 && !lossy;
 }
+#include "descriptions.h"
 static std::string moduleFor(const std::filesystem::path &rel,
                              const std::vector<std::string> &mods,
                              const std::string &reshade) {
@@ -309,6 +310,7 @@ static std::string moduleFor(const std::filesystem::path &rel,
 static std::vector<Action> scanBindings(const std::vector<std::string> &mods,
                                         const std::string &reshade = {}) {
   const auto layout = gameKeyboardLayout();
+  DescriptionSources sources;
   std::vector<Action> found;
   std::error_code ec;
   std::filesystem::recursive_directory_iterator it(
@@ -368,7 +370,8 @@ static std::vector<Action> scanBindings(const std::vector<std::string> &mods,
         if (sep == entry.npos)
           continue;
         auto field = entry.substr(0, sep);
-        if (!bindingField(field) && !uiRank(sec, field) && !toggleRank(sec, field))
+        if (!bindingField(field) && !uiRank(sec, field) && !toggleRank(sec, field) &&
+            !describedField(sources, Action{"", module, file, sec, field}))
           continue;
         // A single modifier flag is supported; unknown modifier metadata is
         // skipped, rather than sending a possibly incomplete combination.
@@ -385,6 +388,7 @@ static std::vector<Action> scanBindings(const std::vector<std::string> &mods,
                  field,
                  false};
         classifyBinding(a, comments);
+        describeBinding(a, sources, it->path());
         a.toggle = a.featureRank > 0;
         a.cachedValue = read(a);
         a.cachedKeys = keysFrom(a, a.cachedValue, layout);

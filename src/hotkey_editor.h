@@ -29,8 +29,10 @@ static std::string encodeBinding(const Action &a, std::string input,
   const auto setting = trim(original.substr(0, comment));
   const auto bar = setting.find('|');
   const auto base = trim(setting.substr(0, bar));
-  const bool numeric = !base.empty() && isdigit((unsigned char)base[0]) &&
-                       base.find(',') == base.npos && !standaloneDigit(a, base);
+  const bool numeric = (a.hexNumbers && !base.empty() &&
+                        base.find_first_not_of("0123456789abcdefABCDEF") == base.npos) ||
+                       (!base.empty() && isdigit((unsigned char)base[0]) &&
+                        base.find(',') == base.npos && !standaloneDigit(a, base));
   if (!recorded.empty()) {
     if (!validShortcut(recorded))
       throw std::runtime_error("Unsupported shortcut.");
@@ -93,8 +95,12 @@ static std::string encodeBinding(const Action &a, std::string input,
     int k = vk(input);
     if (k < 8 || k > 254 || k == 16 || k == 17 || k == 18)
       throw std::runtime_error("Unsupported key.");
-    if (base.size() > 2 && base[0] == '0' &&
-        (base[1] == 'x' || base[1] == 'X')) {
+    if (a.hexNumbers) {
+      char b[16];
+      snprintf(b, sizeof b, "%02X", k);
+      converted = b;
+    } else if (base.size() > 2 && base[0] == '0' &&
+               (base[1] == 'x' || base[1] == 'X')) {
       char b[16];
       snprintf(b, sizeof b, "0x%X", k);
       converted = b;
@@ -243,6 +249,8 @@ static void drawHotkeys() {
   static bool acknowledge = false;
   static HKL lastLayout = nullptr;
   static std::vector<int> recorded, proposed;
+  // Your own name and note for the selected binding, as typed.
+  static char userName[96]{}, userNote[1024]{};
   const auto &list = bindingsSnapshot();
   int exact = 0, overlap = 0;
   for (const auto &a : list) {
@@ -266,7 +274,7 @@ static void drawHotkeys() {
     ImGui::TextWrapped("%s", message.c_str());
   float available = ImGui::GetContentRegionAvail().y;
   float listHeight =
-      (std::max)(70.0f, available - (selected ? 300.0f * UI::scale : 0.0f));
+      (std::max)(70.0f, available - (selected ? 420.0f * UI::scale : 0.0f));
   if (ImGui::BeginTable("Bindings", 4,
                         ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg |
                             ImGuiTableFlags_BordersInnerH |
@@ -297,6 +305,9 @@ static void drawHotkeys() {
           UI::recording = 0;
           acknowledge = false;
           message.clear();
+          const auto mine = userInfo(a);
+          snprintf(userName, sizeof userName, "%s", mine.name.c_str());
+          snprintf(userNote, sizeof userNote, "%s", mine.description.c_str());
         } catch (const std::exception &e) {
           message = e.what();
         }
@@ -345,6 +356,36 @@ static void drawHotkeys() {
       UI::descriptionCell(editing);
     const float width = (std::min)(260 * UI::scale,
                                   ImGui::GetContentRegionAvail().x * .55f);
+
+    // Your own words for this binding, kept in ModActivator.ini. They win over
+    // every other source and take effect at once, without a restart.
+    ImGui::Spacing();
+    ImGui::SetNextItemWidth(width);
+    if (ImGui::InputTextWithHint("Name##UserName", UI::actionName(editing).c_str(), userName,
+                                 sizeof userName))
+      UI::noteGlyphs(std::string(userName));
+    if (ImGui::InputTextMultiline("Note##UserNote", userNote, sizeof userNote,
+                                  ImVec2(width, ImGui::GetTextLineHeight() * 3.5f)))
+      UI::noteGlyphs(std::string(userNote));
+    const auto saveNote = [&](const std::string &name, const std::string &note) {
+      // One line per value in the profile file; newlines are kept by the hex.
+      if (saveUserText("BindingNames", editing, trim(name)) &&
+          saveUserText("BindingNotes", editing, trim(note))) {
+        message = name.empty() && note.empty() ? "Your name and note were removed."
+                                                : "Saved your name and note.";
+        refreshRequested.store(true);
+      } else {
+        message = "Could not save your name and note.";
+      }
+    };
+    if (ImGui::Button("Save name and note"))
+      saveNote(userName, userNote);
+    ImGui::SameLine();
+    if (ImGui::Button("Clear mine")) {
+      userName[0] = userNote[0] = 0;
+      saveNote("", "");
+    }
+    ImGui::Spacing();
     if (auto keys = UI::shortcutField(recorded, width); !keys.empty()) {
       recorded = std::move(keys);
       proposed.clear();

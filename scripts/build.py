@@ -78,6 +78,10 @@ link(out / 'ModActivator.asi', False)
 link(obj / 'ModActivator-tests.asi', True)
 
 shutil.copy2(base / 'ModActivator.ini', out / 'ModActivator.ini')
+shutil.copy2(base / 'data/ModActivator.KnownMods.ini', out / 'ModActivator.KnownMods.ini')
+# For mod authors who want to describe their shortcuts (see the header).
+(out / 'include').mkdir(exist_ok=True)
+shutil.copy2(base / 'include/ModActivatorBindings.h', out / 'include/ModActivatorBindings.h')
 # Stage distributable documentation and required third-party notices.
 for name in ['README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'CHANGELOG.md']:
     shutil.copy2(base / name, out / name)

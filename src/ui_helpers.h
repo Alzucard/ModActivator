@@ -215,6 +215,8 @@ static void noteGlyphs(const std::string &utf8) {
 static std::string name(const Action &a) {
   if (!a.ui.name.empty())
     return a.ui.name;
+  if (!a.modName.empty())
+    return a.ui.name = a.modName; // already UTF-8
   if (isReShadeName(a.module))
     return a.ui.name = "ReShade";
   std::string raw = std::filesystem::path(a.module).stem().string(), out;
@@ -229,6 +231,8 @@ static std::string name(const Action &a) {
 static std::string actionName(const Action &a) {
   if (!a.ui.actionName.empty())
     return a.ui.actionName;
+  if (!a.customName.empty())
+    return a.ui.actionName = a.customName; // already UTF-8
   // Keep the INI action separate from classification and tab placement.
   std::string raw = a.key;
   auto folded = lower(raw);
@@ -278,7 +282,7 @@ static bool matches(const Action &a) {
   }
   if (a.ui.search.empty())
     a.ui.search = lower(displayText(a.module) + " " + name(a) + " " + displayText(a.label) +
-                        " " + actionName(a) + " " + a.description + " " +
+                        " " + actionName(a) + " " + a.description + " " + a.modAbout + " " +
                         displayText(a.cachedValue) + " " + shortcut(a));
   return a.ui.search.find(needle) != std::string::npos;
 }
@@ -286,11 +290,12 @@ static bool matches(const Action &a) {
 static void noteGlyphs(const Action &a) {
   if (isAscii(a.module) && isAscii(a.label) && isAscii(a.description) &&
       isAscii(a.cachedValue) && isAscii(a.overlapNames) && isAscii(a.file) &&
-      isAscii(a.section) && isAscii(a.key)) {
+      isAscii(a.section) && isAscii(a.key) && isAscii(a.customName) &&
+      isAscii(a.modName) && isAscii(a.modAbout)) {
     noteGlyphs(shortcut(a)); // a localized key label can still be non-Latin
     return;
   }
-  for (const auto &text : {name(a), actionName(a), shortcut(a), a.description,
+  for (const auto &text : {name(a), actionName(a), shortcut(a), a.description, a.modAbout,
                            displayText(a.label), displayText(a.file),
                            displayText(a.section), displayText(a.overlapNames)})
     noteGlyphs(text);
@@ -303,17 +308,24 @@ static void bindingTooltip(const Action &a, const std::string &detail = {}) {
   ImGui::TextDisabled("%s", (detail.empty() ? shortcut(a) : detail).c_str());
   ImGui::TextDisabled("%s / [%s] %s", displayText(a.file).c_str(),
                       displayText(a.section).c_str(), displayText(a.key).c_str());
-  if (!a.description.empty()) {
+  if (!a.description.empty() || !a.modAbout.empty()) {
     ImGui::Separator();
     ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 360 * scale);
-    ImGui::TextUnformatted(a.description.c_str());
+    if (!a.description.empty()) {
+      ImGui::TextUnformatted(a.description.c_str());
+      ImGui::TextDisabled("%s", sourceLabel(a.descriptionSource));
+    }
+    if (!a.modAbout.empty())
+      ImGui::TextDisabled("%s: %s", name(a).c_str(), a.modAbout.c_str());
     ImGui::PopTextWrapPos();
   }
   ImGui::EndTooltip();
 }
 static void descriptionCell(const Action &action) {
   if (action.description.empty()) {
-    ImGui::TextDisabled("No INI description");
+    ImGui::TextDisabled("No description");
+    if (ImGui::IsItemHovered())
+      bindingTooltip(action);
     return;
   }
   // Use the first line as the preview. The tooltip shows the full comment.
@@ -359,6 +371,13 @@ static void groupedBindings(const std::vector<Action> &actions, DrawRow drawRow,
     if (search[0])
       flags |= ImGuiTreeNodeFlags_DefaultOpen;
     const bool open = ImGui::TreeNodeEx(title.c_str(), flags);
+    if (const auto &about = bindings.front()->modAbout; !about.empty() && ImGui::IsItemHovered()) {
+      ImGui::BeginTooltip();
+      ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 360 * scale);
+      ImGui::TextUnformatted(about.c_str());
+      ImGui::PopTextWrapPos();
+      ImGui::EndTooltip();
+    }
     if (statusColumn >= 0) {
       const auto severity = std::max_element(
           bindings.begin(), bindings.end(),

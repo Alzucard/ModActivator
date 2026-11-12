@@ -17,23 +17,7 @@ static constexpr int firstCustomTab = 3;
 static constexpr int modMenusPlacement = -1;
 static constexpr int togglesPlacement = -2;
 
-static std::string hexText(const std::string &value) {
-  std::string result;
-  for (unsigned char c : value) {
-    constexpr char digits[] = "0123456789abcdef";
-    result += digits[c >> 4];
-    result += digits[c & 15];
-  }
-  return result;
-}
-static std::string unhexText(const std::string &value) {
-  if (value.size() % 2 || value.find_first_not_of("0123456789abcdef") != value.npos)
-    return {};
-  std::string result;
-  for (size_t i = 0; i < value.size(); i += 2)
-    result += (char)std::stoi(value.substr(i, 2), nullptr, 16);
-  return result;
-}
+// hexText and unhexText are in descriptions.h.
 static void loadLayout() {
   const auto path = folder + "ModActivator.ini";
   char value[128]{};

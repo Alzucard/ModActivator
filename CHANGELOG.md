@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+- Name and describe any shortcut yourself in the Hotkeys tab. Your words are saved in ModActivator.ini and win over every other source.
+- Ship `ModActivator.KnownMods.ini`, which says what the shortcuts of about 60 popular mods do, from their Nexus Mods pages and config files. It also makes settings such as Dynamic Scalify's `OpenMenu` discoverable.
+- Read and write Private Storage Anywhere's key codes in hexadecimal, as the mod does. `PrivateHotkey=73` is F4, not I.
+- Use a readme next to a mod's config file as a description when nothing better says what a shortcut does.
+- Let mods describe their own shortcuts through an optional `ModActivatorBindingsV1` export (`include/ModActivatorBindings.h`).
+- Show where each description came from, and the mod's summary on hover.
+
 ## 1.2.4
 - Fall back to the legacy DirectX path when ReShade is older than 6.8.0 or lacks the add-on event export, instead of never starting (#1).
 - Read the swap chain's colour space from ReShade, so the menu is composited correctly in HDR on the ReShade path (#2).
