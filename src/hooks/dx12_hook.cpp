@@ -1546,6 +1546,35 @@ namespace ml::hooks
         return true;
     }
 
+    // Whether the game's swapchain gets the wrapper. WrapSwapChain=1 and 0
+    // decide it outright. Auto wraps when Streamline, the layer DLSS frame
+    // generation runs in, is loaded: under it the present hook only sees
+    // finished frames, which the menu cannot be drawn on, and the wrapper,
+    // drawing before Streamline interpolates, is the only way it shows.
+    // Without Streamline the present hook is the path with the longer record,
+    // so it stays. The game loads sl.interposer.dll before its first
+    // swapchain, which is where this is asked. Said once in the log.
+    static bool WrapWanted()
+    {
+        const int setting = Settings::Get().wrapSwapChain;
+        const bool streamline = GetModuleHandleA("sl.interposer.dll") != nullptr;
+        const bool wrap = setting >= 0 ? setting != 0 : streamline;
+        static bool s_said = false;
+        if (!s_said)
+        {
+            s_said = true;
+            if (setting < 0)
+                LOG("WrapSwapChain=auto: Streamline (DLSS frame generation) is %s, so the swapchain is %s.",
+                    streamline ? "loaded" : "not loaded",
+                    wrap ? "wrapped and the menu draws before frame generation"
+                         : "left alone and the menu draws through the present hook");
+            else
+                LOG("WrapSwapChain=%d: the swapchain is %s.", setting,
+                    wrap ? "wrapped" : "left alone. The overlay draws through the present hook, which does not show under DLSS frame generation");
+        }
+        return wrap;
+    }
+
     // Detours on Present that the wrapper has always lived alongside. Steam's
     // overlay draws and keys nothing; the frame generation interposer is the
     // proxy the wrapper was built to sit under. Anything else that got to
@@ -2016,7 +2045,7 @@ namespace ml::hooks
         // Whether anything at all can draw is knowable here, without waiting:
         // the wrapper is off when a keying overlay is loaded or the ini says
         // so, and the present calls are about to be refused or taken.
-        const bool willWrap = Settings::Get().wrapSwapChain && !stack;
+        const bool willWrap = !stack && WrapWanted();
         InstallPass(stack, false, willWrap);
 
         if (!willWrap && !AnyDrawPathHooked())
@@ -2138,7 +2167,7 @@ namespace ml::hooks
             PublishPresentQueue(pq, true);
             pq->Release();
         }
-        if (Settings::Get().wrapSwapChain && !s_stack)
+        if (!s_stack && WrapWanted())
             WrapSwapChain(ppSwapChain, hwnd);
         return hr;
     }
@@ -2517,8 +2546,6 @@ namespace ml::hooks
                 return 0;
             }, nullptr, 0, nullptr))
             CloseHandle(watch);
-        if (!Settings::Get().wrapSwapChain)
-            LOG("WrapSwapChain=0: the swapchain is left alone. The overlay draws through the present hook, which does not show under DLSS frame generation.");
 
         char exePath[MAX_PATH]{};
         GetModuleFileNameA(nullptr, exePath, MAX_PATH);

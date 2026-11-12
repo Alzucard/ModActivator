@@ -1119,6 +1119,17 @@ static std::string ansiFolder(const std::wstring &wide) {
     result += '\\';
   return result;
 }
+// WrapSwapChain: 1 always hands the game's swapchain the wrapper, 0 never,
+// and auto (the default, also when the line is missing or says anything
+// else) leaves it to the swapchain hook, which wraps when DLSS frame
+// generation's Streamline layer is loaded: there the present hook draws on
+// frames the menu cannot appear on.
+static int wrapSetting(const std::string &config) {
+  char value[16]{};
+  GetPrivateProfileStringA("General", "WrapSwapChain", "auto", value, sizeof value, config.c_str());
+  const auto v = trimConfigLine(value);
+  return v == "1" ? 1 : v == "0" ? 0 : -1;
+}
 static DWORD WINAPI start(void *arg) {
   char p[MAX_PATH];
   GetModuleFileNameA(nullptr, p, MAX_PATH);
@@ -1149,8 +1160,7 @@ static DWORD WINAPI start(void *arg) {
     LOG("%s", line.c_str());
   loadLayout();
   const auto config = configPath("ModActivator.ini");
-  ml::Settings::Get().wrapSwapChain =
-      GetPrivateProfileIntA("General", "WrapSwapChain", 0, config.c_str()) != 0;
+  ml::Settings::Get().wrapSwapChain = wrapSetting(config);
   ml::Settings::Get().enableDred =
       GetPrivateProfileIntA("General", "EnableDred", 0, config.c_str()) != 0;
   ml::Settings::Get().debugInput =
@@ -1441,7 +1451,7 @@ extern "C" __declspec(dllexport) int ModActivatorMigrationTest(const char *root)
     // 1.3 ones: your options carry over, the shipped comments stay, your
     // bin64 choices win, and the old files are renamed or removed, once.
     std::ofstream(old) << "[General]\n; shipped comment\nHookXInput=1\nUseReShadeEvents=1\n";
-    std::ofstream(folderIni) << "[General]\nHookXInput=0\n";
+    std::ofstream(folderIni) << "[General]\nHookXInput=0\nWrapSwapChain=0\n";
     std::ofstream(folderUser) << "[BindingTypes]\nmod.ini|menu|hotkey=1\n";
     std::ofstream(folderKnown) << "[old.ini]\n";
     relocateFiles();
@@ -1452,8 +1462,15 @@ extern "C" __declspec(dllexport) int ModActivatorMigrationTest(const char *root)
         !exists(folderUser + ".moved") || exists(folderKnown) || readBindingType(probe) != 2 ||
         GetPrivateProfileIntA("General", "HookXInput", 1, old.c_str()) != 0 ||
         GetPrivateProfileIntA("General", "UseReShadeEvents", 0, old.c_str()) != 1 ||
-        text.find("; shipped comment") == text.npos)
+        text.find("; shipped comment") == text.npos || wrapSetting(old) != -1)
       return 9;
+    // WrapSwapChain: auto unless it says 1 or 0.
+    for (const auto &[value, want] : std::vector<std::pair<const char *, int>>{
+             {"1", 1}, {"0", 0}, {"auto", -1}, {"Auto", -1}, {"", -1}, {nullptr, -1}}) {
+      WritePrivateProfileStringA("General", "WrapSwapChain", value, old.c_str());
+      if (wrapSetting(old) != want)
+        return 11;
+    }
     WritePrivateProfileStringA("General", "HookXInput", "1", old.c_str());
     if (!relocateFiles().empty() ||
         GetPrivateProfileIntA("General", "HookXInput", 0, old.c_str()) != 1)

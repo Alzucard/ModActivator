@@ -39,7 +39,7 @@ Launch the game and press **Ctrl+Shift+Backspace**.
 
 Everything you set in the menu (the panel shortcut, binding types, tabs, card order, and your names and notes) is saved in `ModActivator.User.ini`. No release includes that file, so updating, by hand or with a mod manager, never replaces it, and the new `ModActivator.ini` can simply overwrite the old one. Versions before this kept those choices in `ModActivator.ini`. The first start of this version copies them over once and says so in the log.
 
-With ReShade 6.8.0 or newer, ModActivator draws through ReShade's add-on callbacks, after ReShade's effects and overlay. With an older ReShade it falls back to the legacy DirectX path automatically. Set `UseReShadeEvents=0` under `[General]` to always use the legacy path. On the legacy path, try `WrapSwapChain=1` if the overlay is invisible with frame generation. Set `HookXInput=0` if the controller should keep reaching the game while the menu is open.
+With ReShade 6.8.0 or newer, ModActivator draws through ReShade's add-on callbacks, after ReShade's effects and overlay. With an older ReShade it falls back to the legacy DirectX path automatically. Set `UseReShadeEvents=0` under `[General]` to always use the legacy path. On the legacy path, `WrapSwapChain=auto` (the default) draws the menu before DLSS frame generation whenever the game loads it, so the menu shows with frame generation on; `1` always does that and `0` never does. Set `HookXInput=0` if the controller should keep reaching the game while the menu is open.
 
 `ModActivator\ModActivator.log` (in the folder) is started fresh each launch, and the previous one is kept as `ModActivator.log.old`. Set `DebugInput=1` to add cursor and raw input diagnostics each time the menu opens.
 
