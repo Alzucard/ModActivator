@@ -18,22 +18,61 @@ static constexpr int modMenusPlacement = -1;
 static constexpr int togglesPlacement = -2;
 
 // hexText and unhexText are in descriptions.h.
-static void loadLayout() {
-  const auto path = folder + "ModActivator.ini";
-  char value[128]{};
-  GetPrivateProfileStringA("General", "OpenShortcut", "", value, sizeof value,
-                           path.c_str());
-  const auto code = shortcutCode(parseShortcut(value));
-  opener.store(code && (code & 0xff) != VK_ESCAPE ? code : defaultOpener);
+
+// A whole profile section, as the double-null-terminated list of key=value
+// lines the profile API returns, however long it is.
+static std::vector<char> readProfileSection(const char *name, const std::string &path) {
   std::vector<char> section(32768);
-  DWORD size = 0;
   while (true) {
-    size = GetPrivateProfileSectionA("ModLayout", section.data(),
-                                     (DWORD)section.size(), path.c_str());
-    if (size < section.size() - 2)
-      break;
+    const DWORD size = GetPrivateProfileSectionA(name, section.data(),
+                                                 (DWORD)section.size(), path.c_str());
+    if (size < section.size() - 2) {
+      section.resize(size + 2); // keep the two terminating nulls
+      return section;
+    }
     section.resize(section.size() * 2);
   }
+}
+
+// Versions before ModActivator.User.ini kept the menu's choices in
+// ModActivator.ini, which an update replaces. Copies them over once, at the
+// first start without a user file, and only when there is something to copy.
+// ModActivator.ini is left as it is.
+static void migrateUserConfig() {
+  const auto user = userConfigPath();
+  if (GetFileAttributesA(user.c_str()) != INVALID_FILE_ATTRIBUTES)
+    return;
+  const auto old = folder + "ModActivator.ini";
+  bool copied = false;
+  for (const char *name : {"BindingTypes", "ModLayout"}) {
+    const auto section = readProfileSection(name, old);
+    if (section[0] && WritePrivateProfileSectionA(name, section.data(), user.c_str()))
+      copied = true;
+  }
+  // Saved by the menu as hex codes (0x11+0x08); the shipped default spelled
+  // out in words is no choice of yours, so it stays behind.
+  char opener[128]{};
+  GetPrivateProfileStringA("General", "OpenShortcut", "", opener, sizeof opener, old.c_str());
+  if (!_strnicmp(opener, "0x", 2) &&
+      WritePrivateProfileStringA("General", "OpenShortcut", opener, user.c_str()))
+    copied = true;
+  if (copied)
+    LOG("Moved your menu settings from ModActivator.ini to ModActivator.User.ini, "
+        "where updates no longer replace them.");
+}
+
+static void loadLayout() {
+  const auto path = userConfigPath();
+  // Yours from the menu first; then ModActivator.ini, for anyone who sets it
+  // by hand there.
+  char value[128]{};
+  GetPrivateProfileStringA("General", "OpenShortcut", "", value, sizeof value, path.c_str());
+  if (!value[0])
+    GetPrivateProfileStringA("General", "OpenShortcut", "", value, sizeof value,
+                             (folder + "ModActivator.ini").c_str());
+  const auto code = shortcutCode(parseShortcut(value));
+  opener.store(code && (code & 0xff) != VK_ESCAPE ? code : defaultOpener);
+  const auto section = readProfileSection("ModLayout", path);
   ModLayout loaded;
   std::map<unsigned long, ModPlacement> ordered;
   for (const char *p = section.data(); *p; p += strlen(p) + 1) {
@@ -70,8 +109,7 @@ static bool saveLayout(ModLayout next) {
                ":" + hexText(place.binding) + '\0';
   if (section.empty())
     section += '\0';
-  if (!WritePrivateProfileSectionA("ModLayout", section.c_str(),
-                                   (folder + "ModActivator.ini").c_str()))
+  if (!WritePrivateProfileSectionA("ModLayout", section.c_str(), userConfigPath().c_str()))
     return false;
   modLayout = std::move(next);
   ++layoutVersion;
@@ -201,7 +239,7 @@ static bool saveOpener(const std::vector<int> &keys) {
     value += hex;
   }
   if (!WritePrivateProfileStringA("General", "OpenShortcut", value.c_str(),
-                                  (folder + "ModActivator.ini").c_str()))
+                                  userConfigPath().c_str()))
     return false;
   opener.store(code);
   refreshRequested.store(true);

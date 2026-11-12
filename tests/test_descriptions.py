@@ -42,11 +42,15 @@ fn.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int]
 # The mod export: the test DLL describes [Hotkeys] SecretKey in a config
 # named after itself.
 (root / 'ModActivator-tests.ini').write_text('[Hotkeys]\nSecretKey=F9\n; Comment loses.\nOtherKey=F10\n')
-# Your own name and note, hex-encoded UTF-8, beat everything.
+# Your own name and note, hex-encoded UTF-8, beat everything. They live in
+# ModActivator.User.ini, which no release ships; the same sections in the
+# shipped ModActivator.ini, which an update replaces, are not read.
 mine = 'commented.ini|menu|hotkey'
-(root / 'ModActivator.ini').write_text(
+(root / 'ModActivator.User.ini').write_text(
     '[BindingNames]\n' + mine + '=' + 'Mein Fenster'.encode().hex() + '\n'
     '[BindingNotes]\n' + mine + '=' + 'Meine Notiz\nöffnet es'.encode().hex() + '\n')
+(root / 'ModActivator.ini').write_text(
+    '[BindingNames]\ncombined.ini|menu|hotkey=' + 'Not read'.encode().hex() + '\n')
 
 modules = ';'.join(['PrivateStorageAnywhere.asi', 'DynamicScalify.asi', 'Combined.asi',
                     'Commented.asi', 'Preset.asi', 'Nested.asi', 'ReadmeMod.asi', dll.name])
@@ -73,6 +77,7 @@ print('PASS: a database entry makes a field named OpenMenu a shortcut.')
 
 row = rows['Combined.ini', 'Menu', 'Hotkey']
 assert row['source'] == KNOWN and row['feature'] == 150 and row['menu'] == 0, row
+assert row['name'] == 'From the database', row  # not the decoy in ModActivator.ini
 row = rows['Commented.ini', 'Menu', 'Hotkey']
 assert row['source'] == USER and row['name'] == 'Mein Fenster', row
 assert row['description'] == 'Meine Notiz\\nöffnet es', row

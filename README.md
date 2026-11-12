@@ -19,7 +19,9 @@ The panel uses a charcoal-and-gold theme with larger text, searchable mod cards,
 
 Close Crimson Desert. Copy `ModActivator.asi`, `ModActivator.ini` and `ModActivator.KnownMods.ini` into the game's `bin64` folder, beside `CrimsonDesert.exe`. An ASI loader is required.
 
-Launch the game and press **Ctrl+Shift+Backspace**. Keep your existing INI when updating.
+Launch the game and press **Ctrl+Shift+Backspace**.
+
+Everything you set in the menu (the panel shortcut, binding types, tabs, card order, and your names and notes) is saved in `ModActivator.User.ini`, which ModActivator creates beside itself. No release includes that file, so updating, by hand or with a mod manager, never replaces it, and the new `ModActivator.ini` can simply overwrite the old one. Versions before this kept those choices in `ModActivator.ini`. The first start of this version copies them over once and says so in the log.
 
 With ReShade 6.8.0 or newer, ModActivator draws through ReShade's add-on callbacks, after ReShade's effects and overlay. With an older ReShade it falls back to the legacy DirectX path automatically. Set `UseReShadeEvents=0` under `[General]` to always use the legacy path. On the legacy path, try `WrapSwapChain=1` if the overlay is invisible with frame generation. Set `HookXInput=0` if the controller should keep reaching the game while the menu is open.
 
@@ -27,13 +29,13 @@ With ReShade 6.8.0 or newer, ModActivator draws through ReShade's add-on callbac
 
 ## Binding types
 
-ModActivator uses shortcut names and nearby INI comments to identify menu openers and feature toggles. To correct a guess, open **Settings → Mod placement** and set **Show as** to **Menu**, **Toggle**, or **Hotkeys only**. **Automatic** clears the override. These choices are saved in ModActivator.ini and apply immediately. Hotkeys and Mod placement show a description preview when one is available (see below). Hover over a binding to see its exact key and the full description.
+ModActivator uses shortcut names and nearby INI comments to identify menu openers and feature toggles. To correct a guess, open **Settings → Mod placement** and set **Show as** to **Menu**, **Toggle**, or **Hotkeys only**. **Automatic** clears the override. These choices are saved in ModActivator.User.ini and apply immediately. Hotkeys and Mod placement show a description preview when one is available (see below). Hover over a binding to see its exact key and the full description.
 
 ## What a shortcut does
 
 Each binding's name and description come from the most trustworthy source that has one. Hover over a binding to see which:
 
-1. **Your own name and note.** Select a binding in **Hotkeys**, fill in **Name** and **Note**, and click **Save name and note**. They take effect at once, are saved in ModActivator.ini, and survive mod updates. **Clear mine** goes back to the other sources.
+1. **Your own name and note.** Select a binding in **Hotkeys**, fill in **Name** and **Note**, and click **Save name and note**. They take effect at once and are saved in `ModActivator.User.ini`, so updating ModActivator or the mod never replaces them. **Clear mine** goes back to the other sources.
 2. **The mod itself**, for mods that describe their shortcuts to ModActivator (see below).
 3. **`ModActivator.KnownMods.ini`**, a list of what the shortcuts of about 60 popular Crimson Desert mods do, written from their Nexus Mods pages and config files. It also tells ModActivator about settings whose names do not look like shortcuts, and about mods that write key codes in hexadecimal. It is replaced on update; put your own changes in your notes instead.
 4. **The comment** beside the setting in the mod's config file.
@@ -51,7 +53,7 @@ Symbolic shortcuts map by physical key position and display the key label for th
 
 ## Custom tabs and panel shortcut
 
-In **Settings**, choose **New tab**, enter a name, and click **Add tab**. Use the **Tab** column in **Mod placement** to move a mod to Mod menus, Toggles, or any custom tab. The **Show as** column controls how the binding is classified. Its action stays the same. Drag the handle on a mod card to reorder it within its tab. Deleting a tab returns its mods to their default tabs. Changes are saved in ModActivator.ini.
+In **Settings**, choose **New tab**, enter a name, and click **Add tab**. Use the **Tab** column in **Mod placement** to move a mod to Mod menus, Toggles, or any custom tab. The **Show as** column controls how the binding is classified. Its action stays the same. Drag the handle on a mod card to reorder it within its tab. Deleting a tab returns its mods to their default tabs. Changes are saved in ModActivator.User.ini.
 
 Use **Record opener** and **Save opener** to change ModActivator’s shortcut immediately. **Use default** restores Ctrl+Shift+Backspace when saved.
 
@@ -82,7 +84,7 @@ Automated checks cover parsing, discovery, config editing and preservation, back
 
 ## Uninstall
 
-With the game closed, remove `ModActivator.asi`, `ModActivator.ini` and `ModActivator.KnownMods.ini`. Restore edited configs from their backups if needed; uninstalling does not undo previous hotkey edits.
+With the game closed, remove `ModActivator.asi`, `ModActivator.ini` and `ModActivator.KnownMods.ini`, and `ModActivator.User.ini` to forget your menu settings too. Restore edited configs from their backups if needed; uninstalling does not undo previous hotkey edits.
 
 ## Credits
 

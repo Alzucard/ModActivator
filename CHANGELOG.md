@@ -1,7 +1,8 @@
 # Changelog
 
 ## Unreleased
-- Name and describe any shortcut yourself in the Hotkeys tab. Your words are saved in ModActivator.ini and win over every other source.
+- Save everything set in the menu (panel shortcut, binding types, tabs, card order, names and notes) in `ModActivator.User.ini` instead of `ModActivator.ini`. No release ships that file, so an update, which replaces `ModActivator.ini`, no longer resets them. The first start copies an older `ModActivator.ini`'s choices over once.
+- Name and describe any shortcut yourself in the Hotkeys tab. Your words win over every other source.
 - Ship `ModActivator.KnownMods.ini`, which says what the shortcuts of about 60 popular mods do, from their Nexus Mods pages and config files. It also makes settings such as Dynamic Scalify's `OpenMenu` discoverable.
 - Read and write Private Storage Anywhere's key codes in hexadecimal, as the mod does. `PrivateHotkey=73` is F4, not I.
 - Use a readme next to a mod's config file as a description when nothing better says what a shortcut does.

@@ -357,7 +357,7 @@ static void drawHotkeys() {
     const float width = (std::min)(260 * UI::scale,
                                   ImGui::GetContentRegionAvail().x * .55f);
 
-    // Your own words for this binding, kept in ModActivator.ini. They win over
+    // Your own words for this binding, kept in ModActivator.User.ini. They win over
     // every other source and take effect at once, without a restart.
     ImGui::Spacing();
     ImGui::SetNextItemWidth(width);

@@ -97,17 +97,24 @@ static const std::string &cachedIdentity(const Action &a) {
     a.ui.identity = identity(a);
   return a.ui.identity;
 }
+// Everything you choose in the menu: the panel shortcut, binding types, tabs,
+// placement and card order, and your names and notes. No release ships this
+// file, so installing an update, which brings a fresh ModActivator.ini, never
+// replaces it. Created on the first save (or by migrateUserConfig, from what
+// older versions kept in ModActivator.ini).
+static std::string userConfigPath() { return folder + "ModActivator.User.ini"; }
+
 // Overrides belong to ModActivator, keyed by the config path, section and field.
 static int readBindingType(const Action &action) {
   return GetPrivateProfileIntA("BindingTypes", identity(action).c_str(), 0,
-                               (folder + "ModActivator.ini").c_str());
+                               userConfigPath().c_str());
 }
 
 static bool saveBindingType(const Action &action, int type) {
   const auto value = std::to_string(type);
   return WritePrivateProfileStringA("BindingTypes", identity(action).c_str(),
                                     type ? value.c_str() : nullptr,
-                                    (folder + "ModActivator.ini").c_str()) != FALSE;
+                                    userConfigPath().c_str()) != FALSE;
 }
 
 static std::string trimConfigLine(const std::string &line) {

@@ -933,6 +933,9 @@ static DWORD WINAPI start(void *arg) {
             "Move the game to a path with plain characters, or enable 8.3 names on that drive.");
     return 0;
   }
+  ml::Log::Begin(); // before the migration, so its line is on record
+  LOG("Mod Activator " MODACTIVATOR_VERSION " started.");
+  migrateUserConfig();
   loadLayout();
   const auto config = folder + "ModActivator.ini";
   ml::Settings::Get().wrapSwapChain =
@@ -943,8 +946,6 @@ static DWORD WINAPI start(void *arg) {
       GetPrivateProfileIntA("General", "DebugInput", 0, config.c_str()) != 0;
   ml::Settings::Get().hookXInput =
       GetPrivateProfileIntA("General", "HookXInput", 1, config.c_str()) != 0;
-  ml::Log::Begin();
-  LOG("Mod Activator " MODACTIVATOR_VERSION " started.");
   if (const auto status = MH_Initialize(); status != MH_OK) {
     LOG_ERR("MinHook failed to initialise (%s). No hooks were installed, so the menu cannot open.",
             MH_StatusToString(status));
@@ -1144,6 +1145,67 @@ ModActivatorSettingsTest(const char *root) {
     loadLayout();
     if (!modLayout.tabs.empty() || !modLayout.placements.empty())
       return 8;
+    return 0;
+  }();
+  folder.clear();
+  opener.store(defaultOpener);
+  modLayout = {};
+  ++layoutVersion;
+  refreshRequested.store(false);
+  return result;
+}
+// The move of the menu's choices out of ModActivator.ini. root is an empty
+// folder; each case writes its own ModActivator.ini.
+extern "C" __declspec(dllexport) int ModActivatorMigrationTest(const char *root) {
+  if (!folder.empty() || !root)
+    return -1;
+  folder = root;
+  const auto old = folder + "ModActivator.ini", user = userConfigPath();
+  const auto exists = [](const std::string &p) {
+    return GetFileAttributesA(p.c_str()) != INVALID_FILE_ATTRIBUTES;
+  };
+  const Action probe{"x", "Mod.asi", "Mod.ini", "Menu", "Hotkey"};
+  const int result = [&] {
+    // A fresh install: only the shipped default, spelled in words. Nothing
+    // is yours, so no user file appears.
+    DeleteFileA(user.c_str());
+    std::ofstream(old) << "[General]\nOpenShortcut=Ctrl+Shift+Backspace\n";
+    migrateUserConfig();
+    if (exists(user))
+      return 1;
+    loadLayout();
+    if (openerKeys() != std::vector<int>{VK_CONTROL, VK_SHIFT, VK_BACK})
+      return 2;
+    // An older version's choices come over: the recorded opener, the binding
+    // types and the layout.
+    std::ofstream(old) << "[General]\nOpenShortcut=0x11+0x70\nWrapSwapChain=0\n"
+                          "[BindingTypes]\nmod.ini|menu|hotkey=2\n"
+                          "[ModLayout]\nT3=" + hexText("Mine") + "\nM0=3:" + hexText(identity(probe)) + "\n";
+    migrateUserConfig();
+    if (!exists(user))
+      return 3;
+    loadLayout();
+    if (openerKeys() != std::vector<int>{VK_CONTROL, VK_F1} || readBindingType(probe) != 2 ||
+        modLayout.tabs[3] != "Mine" || actionTab(probe) != 3)
+      return 4;
+    // Once there is a user file, an update's fresh ModActivator.ini changes
+    // nothing, and the next start does not copy again.
+    std::ofstream(old) << "[General]\nOpenShortcut=Ctrl+Shift+Backspace\n"
+                          "[BindingTypes]\nmod.ini|menu|hotkey=1\n";
+    migrateUserConfig();
+    loadLayout();
+    if (openerKeys() != std::vector<int>{VK_CONTROL, VK_F1} || readBindingType(probe) != 2 ||
+        modLayout.tabs[3] != "Mine")
+      return 5;
+    // What the menu saves goes to the user file, never to ModActivator.ini.
+    if (!saveOpener({VK_SHIFT, VK_F2}) || !saveBindingType(probe, 3) || !saveLayout({}))
+      return 6;
+    char shipped[64]{};
+    GetPrivateProfileStringA("General", "OpenShortcut", "", shipped, sizeof shipped, old.c_str());
+    if (std::string(shipped) != "Ctrl+Shift+Backspace" ||
+        GetPrivateProfileIntA("BindingTypes", identity(probe).c_str(), 0, old.c_str()) != 1 ||
+        readBindingType(probe) != 3)
+      return 7;
     return 0;
   }();
   folder.clear();

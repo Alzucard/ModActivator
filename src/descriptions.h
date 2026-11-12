@@ -2,7 +2,7 @@
 // What a binding does, and what to call it, from every source ModActivator
 // knows. In order of trust:
 //
-//   1. your own name and note, saved in ModActivator.ini
+//   1. your own name and note, saved in ModActivator.User.ini
 //   2. the mod itself, through the optional ModActivatorBindingsV1 export
 //      (see include/ModActivatorBindings.h)
 //   3. ModActivator.KnownMods.ini, shipped beside the plugin
@@ -66,12 +66,13 @@ struct BindingInfo {
 };
 
 // --- 1. your own names and notes --------------------------------------------
+// In ModActivator.User.ini (see userConfigPath), which updates never replace.
 // Hex-encoded UTF-8 under [BindingNames] and [BindingNotes], keyed like
 // [BindingTypes], so any text survives the profile API.
 static std::string readUserText(const char *section, const Action &action) {
   char value[4096]{};
   GetPrivateProfileStringA(section, identity(action).c_str(), "", value, sizeof value,
-                           (folder + "ModActivator.ini").c_str());
+                           userConfigPath().c_str());
   return unhexText(value);
 }
 static bool saveUserText(const char *section, const Action &action, const std::string &text) {
@@ -80,7 +81,7 @@ static bool saveUserText(const char *section, const Action &action, const std::s
     return false;
   return WritePrivateProfileStringA(section, identity(action).c_str(),
                                     text.empty() ? nullptr : value.c_str(),
-                                    (folder + "ModActivator.ini").c_str()) != FALSE;
+                                    userConfigPath().c_str()) != FALSE;
 }
 static BindingInfo userInfo(const Action &action) {
   return {0, readUserText("BindingNames", action), readUserText("BindingNotes", action)};
