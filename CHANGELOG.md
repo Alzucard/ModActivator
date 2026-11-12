@@ -8,6 +8,11 @@
 - Read and write Private Storage Anywhere's key codes in hexadecimal, as the mod does. `PrivateHotkey=73` is F4, not I.
 - Send the modifiers a mod keeps in a setting of its own: Gilded Compass's menu is Ctrl+F7 when `HotkeyCtrl=1` and its minimap key always takes Ctrl, and DesertLink's second keys take the modifier named in `OpenKey2WithVk`. Gilded Compass's `HotkeyCtrl` flag is no longer listed as a shortcut for the 1 key.
 - Add EEA HUD Resizer, Gilded Compass and SwiftQuestFollow to the known mods, and Drop Control's keys to its summary.
+- Check every pointer a mod's `ModActivatorBindingsV1` export hands over before reading it, so a broken export is skipped instead of crashing the game. The `__try` guards this relied on do nothing in the MinGW build.
+- In `bin64` itself, use only readmes named after the mod, not any `readme*` that could belong to another mod or tool.
+- Name settings called just `Hotkey` or `HotkeyVk` "Hotkey" instead of "Hot", and `MapHotkeyVk` "Map".
+- Read and write hex key codes from A0 to FE, such as `BA` for the `;` key, for mods that write codes in hex.
+- Show the selected binding's new name and description in the Hotkeys editor right after saving a note.
 - Use a readme next to a mod's config file as a description when nothing better says what a shortcut does.
 - Let mods describe their own shortcuts through an optional `ModActivatorBindingsV1` export (`include/ModActivatorBindings.h`).
 - Show where each description came from, and the mod's summary on hover.

@@ -252,6 +252,19 @@ static void drawHotkeys() {
   // Your own name and note for the selected binding, as typed.
   static char userName[96]{}, userNote[1024]{};
   const auto &list = bindingsSnapshot();
+  // After a refresh (saving your note causes one), the selected binding is
+  // taken again from the new list, so its title and description are current.
+  // What you typed and the config snapshot stay.
+  static unsigned editingVersion = 0;
+  if (selected && editingVersion != bindingsSnapshotVersion) {
+    editingVersion = bindingsSnapshotVersion;
+    const auto id = cachedIdentity(editing); // a copy: editing is replaced below
+    for (const auto &a : list)
+      if (cachedIdentity(a) == id) {
+        editing = a;
+        break;
+      }
+  }
   int exact = 0, overlap = 0;
   for (const auto &a : list) {
     if (a.severity == 2)
@@ -297,6 +310,7 @@ static void drawHotkeys() {
         try {
           auto selectedSnapshot = readBytes(folder + a.file);
           editing = a;
+          editingVersion = bindingsSnapshotVersion;
           snapshot = std::move(selectedSnapshot);
           selected = true;
           recorded.clear();

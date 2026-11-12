@@ -212,40 +212,63 @@ struct ModExport {
   BindingInfo info;
 };
 
-// Copies a C string from another module, which may be bad memory. No C++
-// objects live in here, so structured exception handling can guard it.
+// Another module's pointers may be bad: unloaded, freed or simply wrong. Every
+// byte is checked before it is read, since __try/__except does not catch
+// faults in this MinGW build: a bad read would take the whole game down.
+
+// The end of the readable memory starting at address, or address itself when
+// none is: committed pages that can be read and are not guard pages.
+static uintptr_t readableUntil(uintptr_t address) {
+  MEMORY_BASIC_INFORMATION info{};
+  if (!address || !VirtualQuery(reinterpret_cast<const void *>(address), &info, sizeof info))
+    return address;
+  constexpr DWORD readable = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READ |
+                             PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+  if (info.State != MEM_COMMIT || (info.Protect & (PAGE_GUARD | PAGE_NOACCESS)) ||
+      !(info.Protect & readable))
+    return address;
+  return reinterpret_cast<uintptr_t>(info.BaseAddress) + info.RegionSize;
+}
+static bool readableRange(const void *pointer, size_t size) {
+  auto address = reinterpret_cast<uintptr_t>(pointer);
+  const auto end = address + size;
+  if (!pointer || end < address)
+    return false;
+  while (address < end) {
+    const auto until = readableUntil(address);
+    if (until <= address)
+      return false;
+    address = until;
+  }
+  return true;
+}
+// Copies a C string, truncated to capacity. False when it runs into memory
+// that cannot be read before its end (or before capacity fills).
 static bool copyForeign(const char *source, char *target, size_t capacity) {
   target[0] = 0;
   if (!source)
     return true;
-  __try {
-    size_t n = 0;
-    while (n + 1 < capacity && source[n]) {
-      target[n] = source[n];
-      ++n;
+  auto address = reinterpret_cast<uintptr_t>(source);
+  uintptr_t until = address;
+  size_t n = 0;
+  while (n + 1 < capacity) {
+    if (address + n >= until && (until = readableUntil(address + n)) <= address + n) {
+      target[0] = 0;
+      return false;
     }
-    target[n] = 0;
-    return true;
-  } __except (EXCEPTION_EXECUTE_HANDLER) {
-    target[0] = 0;
-    return false;
+    const char c = source[n];
+    if (!c)
+      break;
+    target[n++] = c;
   }
-}
-static const ModActivatorBindingV1 *callExport(ModActivatorBindingsV1Fn fn, unsigned *count) {
-  __try {
-    return fn(count);
-  } __except (EXCEPTION_EXECUTE_HANDLER) {
-    *count = 0;
-    return nullptr;
-  }
+  target[n] = 0;
+  return true;
 }
 static bool readForeignEntry(const ModActivatorBindingV1 *entry, ModActivatorBindingV1 *copy) {
-  __try {
-    *copy = *entry;
-    return true;
-  } __except (EXCEPTION_EXECUTE_HANDLER) {
+  if (!readableRange(entry, sizeof *entry))
     return false;
-  }
+  *copy = *entry;
+  return true;
 }
 
 static std::vector<ModExport> readModExport(HMODULE module) {
@@ -254,8 +277,10 @@ static std::vector<ModExport> readModExport(HMODULE module) {
                          : nullptr;
   if (!fn)
     return {};
+  // The call itself runs the mod's own code; a mod that faults in there would
+  // crash the game with or without ModActivator. What it returns is checked.
   unsigned count = 0;
-  const auto *entries = callExport(fn, &count);
+  const auto *entries = fn(&count);
   std::vector<ModExport> out;
   if (!entries)
     return out;
@@ -297,10 +322,20 @@ static const ModExport *exportFor(const std::vector<ModExport> &exports, const A
 }
 
 // --- 5. readmes --------------------------------------------------------------
-// Text files beside a mod's config that are about the mod: readme*, or named
-// after the mod. Licences and notices are not.
+// Whether a file name is the mod's own name followed by nothing or by
+// something other than a letter or digit: "ReadmeMod readme.txt" and
+// "ReadmeMod.txt" for ReadmeMod, but not "ReadmeModPlus.txt".
+static bool namedAfter(const std::string &name, const std::string &moduleStem) {
+  return !moduleStem.empty() && name.compare(0, moduleStem.size(), moduleStem) == 0 &&
+         (name.size() == moduleStem.size() ||
+          !isalnum(static_cast<unsigned char>(name[moduleStem.size()])));
+}
+// Text files beside a mod's config that are about the mod: named after it,
+// or, in a folder of the mod's own, any readme*. In a folder every mod shares
+// (bin64 itself) a readme could be anyone's, so only the mod's name counts.
+// Licences and notices never do.
 static std::vector<std::string> readmeLines(const std::filesystem::path &directory,
-                                            const std::string &moduleStem) {
+                                            const std::string &moduleStem, bool shared) {
   std::vector<std::string> lines;
   std::error_code ec;
   int files = 0;
@@ -313,8 +348,8 @@ static std::vector<std::string> readmeLines(const std::filesystem::path &directo
     if ((extension != ".txt" && extension != ".md") || name.find("licen") != name.npos ||
         name.find("notice") != name.npos)
       continue;
-    if (name.find("readme") == name.npos && name.find("read me") == name.npos &&
-        (moduleStem.empty() || name.compare(0, moduleStem.size(), moduleStem) != 0))
+    const bool generic = name.find("readme") != name.npos || name.find("read me") != name.npos;
+    if (!namedAfter(name, moduleStem) && (shared || !generic))
       continue;
     std::error_code sizeError;
     if (!it->is_regular_file(sizeError) || it->file_size(sizeError) > 256 * 1024 || sizeError)
@@ -398,8 +433,13 @@ struct DescriptionSources {
     const auto directory = config.parent_path();
     const auto key = lower(directory.string()) + "|" + stem;
     auto it = readmes.find(key);
-    if (it == readmes.end())
-      it = readmes.emplace(key, readmeLines(directory, stem)).first;
+    if (it == readmes.end()) {
+      // The scan's root: folder ends in a separator, so its parent_path is
+      // the folder itself.
+      const bool shared = lower(directory.string()) ==
+                          lower(std::filesystem::path(folder).parent_path().string());
+      it = readmes.emplace(key, readmeLines(directory, stem, shared)).first;
+    }
     return it->second;
   }
 };

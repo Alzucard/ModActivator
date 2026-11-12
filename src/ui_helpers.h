@@ -236,6 +236,11 @@ static std::string actionName(const Action &a) {
   // Keep the INI action separate from classification and tab placement.
   std::string raw = a.key;
   auto folded = lower(raw);
+  // A key that is nothing but the word (Hotkey, HotkeyVk, KeyCode) is named
+  // by the word, not cut down to a stub such as "Hot".
+  for (std::string_view whole : {"hotkey", "hotkeyvk", "hotkeycode", "key", "keyvk", "keycode"})
+    if (folded == whole)
+      return a.ui.actionName = folded.compare(0, 6, "hotkey") == 0 ? "Hotkey" : "Key";
   for (std::string_view prefix : {"hotkey", "key"}) {
     if (raw.size() > prefix.size() && folded.compare(0, prefix.size(), prefix) == 0 &&
         (raw[prefix.size()] == '_' || isupper((unsigned char)raw[prefix.size()]))) {
@@ -244,7 +249,8 @@ static std::string actionName(const Action &a) {
       break;
     }
   }
-  for (std::string_view suffix : {"hotkey", "keycode", "keyvk", "key"}) {
+  // Longest first, so MapHotkeyVk is "Map", not "Map Hot".
+  for (std::string_view suffix : {"hotkeyvk", "hotkeycode", "hotkey", "keycode", "keyvk", "key"}) {
     if (raw.size() > suffix.size() &&
         folded.compare(raw.size() - suffix.size(), suffix.size(), suffix) == 0) {
       raw.resize(raw.size() - suffix.size());

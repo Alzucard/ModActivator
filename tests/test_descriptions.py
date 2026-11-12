@@ -52,6 +52,17 @@ fn.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int]
 (root / 'ReadmeMod readme.txt').write_text(
     'ReadmeMod 1.0\n\nHotkey = F7 - opens the readme mod window\n\nBareKey:\nStarts the readme demo.\n')
 (root / 'ReadmeMod-LICENSE.txt').write_text('Hotkey grants you no rights at all.\n')
+# A readme that could be anyone's, in the folder every mod shares, and one
+# for a mod whose name merely starts the same: neither describes ReadmeMod or
+# Unrelated. A generic readme in a mod's own folder does describe that mod.
+(root / 'README.txt').write_text('Other tool\nHotkey = F9 - toggles the other tool overlay\n')
+(root / 'ReadmeModPlus.txt').write_text('BareKey: belongs to another mod entirely.\n')
+(root / 'Unrelated.ini').write_text('[Menu]\nHotkey=F3\n')
+(root / 'Boxed').mkdir()
+(root / 'Boxed/Boxed.ini').write_text('[Menu]\nHotkey=F5\n')
+(root / 'Boxed/readme.txt').write_text('Hotkey: opens the boxed window.\n')
+# Keys named only by the word, or ending in more than one suffix.
+(root / 'Names.ini').write_text('[Menu]\nHotkey=F1\n[Other]\nHotkeyVk=113\nMapHotkeyVk=114\n')
 # The mod export: the test DLL describes [Hotkeys] SecretKey in a config
 # named after itself.
 (root / 'ModActivator-tests.ini').write_text('[Hotkeys]\nSecretKey=F9\n; Comment loses.\nOtherKey=F10\n')
@@ -67,11 +78,23 @@ mine = 'commented.ini|menu|hotkey'
 
 modules = ';'.join(['PrivateStorageAnywhere.asi', 'DynamicScalify.asi', 'Combined.asi',
                     'Commented.asi', 'Preset.asi', 'Nested.asi', 'ReadmeMod.asi', dll.name,
-                    'Compass.asi', 'Flagless.asi', 'Linked.asi',
-                    'ModActivator.asi'])
+                    'Compass.asi', 'Flagless.asi', 'Linked.asi', 'Unrelated.asi',
+                    'Boxed.asi', 'Names.asi', 'ModActivator.asi'])
 buf = ctypes.create_string_buffer(100000)
 r = fn((str(root) + '\\').encode(), modules.encode(), buf, len(buf))
 assert r >= 0, f'describe test failed with {r}'
+
+# A broken mod export (pointers to nothing, a count past its array) is
+# refused entry by entry instead of crashing the game, and the good entry
+# before it still counts.
+assert m.ModActivatorForeignReadTest() == 0, 'foreign memory check failed'
+m.ModActivatorBadExportTest(1)
+bad = ctypes.create_string_buffer(100000)
+r2 = fn((str(root) + '\\').encode(), dll.name.encode(), bad, len(bad))
+m.ModActivatorBadExportTest(0)
+assert r2 >= 0, f'describe with a broken export failed with {r2}'
+assert 'Exported name' in bad.value.decode('utf-8'), bad.value
+print('PASS: a broken mod export is refused, not read, and its good entries still count.')
 rows = {}
 for line in buf.value.decode('utf-8').splitlines():
     f = line.split('|')
@@ -120,6 +143,17 @@ assert row['source'] == README and row['description'] == 'opens the readme mod w
 row = rows['ReadmeMod.ini', 'Other', 'BareKey']
 assert row['source'] == README and row['description'] == 'Starts the readme demo.', row
 print('PASS: readme lines, on the same line and the next, and licences ignored.')
+
+assert rows['Unrelated.ini', 'Menu', 'Hotkey']['source'] != README, rows['Unrelated.ini', 'Menu', 'Hotkey']
+assert rows['ReadmeMod.ini', 'Other', 'BareKey']['description'] == 'Starts the readme demo.'
+row = rows['Boxed/Boxed.ini', 'Menu', 'Hotkey']
+assert row['source'] == README and row['description'] == 'opens the boxed window.', row
+print("PASS: in bin64 only a readme named after the mod counts; in a mod's own folder any readme does.")
+
+assert rows['Names.ini', 'Menu', 'Hotkey']['name'] == 'Hotkey'
+assert rows['Names.ini', 'Other', 'HotkeyVk']['name'] == 'Hotkey'
+assert rows['Names.ini', 'Other', 'MapHotkeyVk']['name'] == 'Map'
+print('PASS: keys named only Hotkey or HotkeyVk keep that name instead of "Hot".')
 
 row = rows[dll.stem + '.ini', 'Hotkeys', 'SecretKey']
 assert row['source'] == MOD and row['name'] == 'Exported name' and row['feature'] == 150, row

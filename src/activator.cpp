@@ -270,6 +270,15 @@ static bool standaloneDigit(const Action &a, const std::string &s) {
   // A standalone zero is commonly used to disable a shortcut.
   return !explicitVk && s.size() == 1 && s[0] >= '1' && s[0] <= '9';
 }
+// A bare hex key code, for a mod that writes them so: one digit, or two hex
+// digits other than F followed by a digit.
+static bool isHexCode(const std::string &s) {
+  const auto hex = [](char c) { return isxdigit(static_cast<unsigned char>(c)) != 0; };
+  if (s.size() == 1)
+    return isdigit(static_cast<unsigned char>(s[0])) != 0;
+  return s.size() == 2 && hex(s[0]) && hex(s[1]) &&
+         !(toupper(static_cast<unsigned char>(s[0])) == 'F' && isdigit(static_cast<unsigned char>(s[1])));
+}
 // The modifiers a.modifierRule adds. Its words, separated by spaces or
 // commas:
 //   Ctrl, Shift, Alt      always that modifier
@@ -314,10 +323,10 @@ static std::vector<int> keysFrom(const Action &a, std::string s,
   if (comment != std::string::npos)
     s.resize(comment);
   s = s.substr(0, s.find('|'));
-  // A mod that writes its codes in hex without the 0x: 73 is F4, not I.
-  // A lone letter is still that letter's key.
-  if (a.hexNumbers && !s.empty() && s.size() <= 2 && isdigit((unsigned char)s[0]) &&
-      s.find_first_not_of("0123456789abcdefABCDEF") == s.npos)
+  // A mod that writes its codes in hex without the 0x: 73 is F4, not I, and
+  // BA is the ; key. A lone letter is still that letter's key, and F plus a
+  // digit is still that F key (0xF0 to 0xF9 are no keys anyone binds).
+  if (a.hexNumbers && isHexCode(s))
     s = "0x" + s;
   std::vector<int> out;
   for (auto pair : {std::pair<const char *, int>{"RequireCtrl", 17},
@@ -1388,8 +1397,14 @@ ModActivatorDescribeTest(const char *root, const char *modules, char *out, int c
       folder.clear();
       return -4;
     }
+    // BA is the ; key's code, and F6 is still the F6 key.
+    if (keysFrom(hex, "BA") != std::vector<int>{0xBA} || keysFrom(hex, "f6") != std::vector<int>{VK_F6}) {
+      folder.clear();
+      return -7;
+    }
     std::ofstream(folder + "Hex.ini") << "[Hotkeys]\nPrivateHotkey=73\n";
-    if (encodeBinding(hex, "F6") != "75" || encodeBinding(hex, "", {VK_F7}) != "76") {
+    if (encodeBinding(hex, "F6") != "75" || encodeBinding(hex, "", {VK_F7}) != "76" ||
+        encodeBinding(hex, "", {VK_OEM_1}) != "BA") {
       folder.clear();
       return -5;
     }
@@ -1416,14 +1431,67 @@ ModActivatorDescribeTest(const char *root, const char *modules, char *out, int c
 // The test build describes one of its own fixture bindings, so the mod
 // export is read end to end: tests/test_descriptions.py puts a config named
 // after this DLL beside the fixtures.
+// With ModActivatorBadExportTest(1), it answers like a broken mod instead:
+// one good entry, then strings and an entry that point at nothing.
+static bool badExport = false;
 extern "C" __declspec(dllexport) const ModActivatorBindingV1 *ModActivatorBindingsV1(unsigned *count) {
   static const ModActivatorBindingV1 bindings[] = {
       {"ModActivator-tests.ini", "Hotkeys", "SecretKey", "Exported name",
        "Described by the mod itself.", ModActivatorKindToggle},
       {nullptr, nullptr, "", "ignored", "an entry without a key is skipped", ModActivatorKindMenu},
   };
+  static const ModActivatorBindingV1 broken[] = {
+      {"ModActivator-tests.ini", "Hotkeys", "SecretKey", "Exported name",
+       "Described by the mod itself.", ModActivatorKindToggle},
+      {nullptr, nullptr, "OtherKey", reinterpret_cast<const char *>(0x10), "bad name",
+       ModActivatorKindMenu},
+  };
+  if (badExport) {
+    *count = 1000; // more entries than the array holds: the rest is not there
+    return broken;
+  }
   *count = sizeof bindings / sizeof bindings[0];
   return bindings;
+}
+extern "C" __declspec(dllexport) void ModActivatorBadExportTest(int bad) { badExport = bad != 0; }
+
+// Reading another module's memory: strings that run into a page that cannot
+// be read, and pointers to nothing, are refused instead of read.
+extern "C" __declspec(dllexport) int ModActivatorForeignReadTest() {
+  SYSTEM_INFO system{};
+  GetSystemInfo(&system);
+  const size_t page = system.dwPageSize;
+  auto *memory = static_cast<char *>(VirtualAlloc(nullptr, page * 2, MEM_COMMIT | MEM_RESERVE,
+                                                  PAGE_READWRITE));
+  if (!memory)
+    return -1;
+  DWORD old = 0;
+  VirtualProtect(memory + page, page, PAGE_NOACCESS, &old);
+  char *unterminated = memory + page - 3; // "abc" and then the no-access page
+  memcpy(unterminated, "abc", 3);
+  char *terminated = memory + page - 4;
+  terminated[0] = 'x';
+  char target[64];
+  int result = 0;
+  if (copyForeign(unterminated, target, sizeof target))
+    result = 1;
+  else if (copyForeign(reinterpret_cast<const char *>(0x10), target, sizeof target))
+    result = 2;
+  else if (!copyForeign(nullptr, target, sizeof target) || target[0])
+    result = 3;
+  else if (!copyForeign("fine", target, sizeof target) || strcmp(target, "fine"))
+    result = 4;
+  else if (!copyForeign("truncated", target, 4) || strcmp(target, "tru"))
+    result = 5;
+  ModActivatorBindingV1 entry{};
+  if (!result && readForeignEntry(reinterpret_cast<const ModActivatorBindingV1 *>(
+                                      memory + page - sizeof entry / 2),
+                                  &entry))
+    result = 6;
+  if (!result && !readableRange(memory, page))
+    result = 7;
+  VirtualFree(memory, 0, MEM_RELEASE);
+  return result;
 }
 extern "C" __declspec(dllexport) int
 ModActivatorEditorTest(const char *root, const char *file, const char *sec,
