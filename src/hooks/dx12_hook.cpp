@@ -775,6 +775,14 @@ namespace ml::hooks
         oExecuteCommandLists(queue, numLists, lists);
     }
 
+    // Per-frame counts for the [frames] log lines (see FrameReport).
+    struct FrameStats
+    {
+        std::atomic<unsigned> presents{0}, notGameWindow{0}, notGameFacing{0}, busy{0},
+            closed{0}, drawn{0}, notDrawn{0}, chainSwitches{0}, threadSwitches{0}, gpuWaits{0};
+    };
+    static FrameStats g_frameStats;
+
     // Records + submits the overlay. Kept as its own function so hkPresent can
     // wrap the call in __try/__except without object-unwinding conflicts.
     static bool DrawOverlay(IDXGISwapChain3* swapChain)
@@ -870,8 +878,21 @@ namespace ml::hooks
         }
         FrameContext& frame = g_frames[idx];
 
-        // The allocator cannot be reset while the GPU still uses it.
-        const auto completed = g_fence->GetCompletedValue();
+        // The allocator cannot be reset while the GPU still uses it. It used
+        // to skip the menu for this frame then, which with DLSS frame
+        // generation and two back buffers happened on up to half the frames
+        // and made the menu blink. Like Trinity, it waits for that work
+        // instead: our own submission from a frame or two ago, normally a
+        // fraction of a millisecond away. Only after 100 ms is the frame
+        // given up, so a stuck GPU cannot hold the game.
+        auto completed = g_fence->GetCompletedValue();
+        if (completed != UINT64_MAX && completed < frame.fenceValue && g_fenceEvent &&
+            SUCCEEDED(g_fence->SetEventOnCompletion(frame.fenceValue, g_fenceEvent)))
+        {
+            g_frameStats.gpuWaits.fetch_add(1, std::memory_order_relaxed);
+            WaitForSingleObject(g_fenceEvent, 100);
+            completed = g_fence->GetCompletedValue();
+        }
         if (completed < frame.fenceValue || completed == UINT64_MAX ||
             FAILED(frame.commandAllocator->Reset()) ||
             FAILED(g_commandList->Reset(frame.commandAllocator, nullptr)))
@@ -967,12 +988,6 @@ namespace ml::hooks
     // At most 120 such lines a session. The frame generation libraries loaded
     // are written at each opening when they changed, since frame generation
     // presenting frames this mod never sees is the other way to blink.
-    struct FrameStats
-    {
-        std::atomic<unsigned> presents{0}, notGameWindow{0}, notGameFacing{0}, busy{0},
-            closed{0}, drawn{0}, notDrawn{0}, chainSwitches{0}, threadSwitches{0};
-    };
-    static FrameStats g_frameStats;
 
     // Counted by the ReShade path, which refuses other windows before
     // RenderOverlay is reached.
@@ -1018,15 +1033,16 @@ namespace ml::hooks
         const unsigned presents = take(f.presents), notGameWindow = take(f.notGameWindow),
                        notGameFacing = take(f.notGameFacing), busy = take(f.busy),
                        closed = take(f.closed), drawn = take(f.drawn), notDrawn = take(f.notDrawn),
-                       chains = take(f.chainSwitches), threads = take(f.threadSwitches);
+                       chains = take(f.chainSwitches), threads = take(f.threadSwitches),
+                       waits = take(f.gpuWaits);
         if (s_lines < 120)
         {
             ++s_lines;
             LOG("[frames] %.1f s: %u presents; menu drawn on %u, draw failed on %u, menu closed on %u, "
                 "skipped: %u another window, %u not the game's frames, %u still drawing the last one; "
-                "%u swapchain switches, %u thread switches.%s",
+                "%u swapchain switches, %u thread switches; waited for the GPU on %u.%s",
                 (now - s_last) / 1000.0, presents, drawn, notDrawn, closed, notGameWindow, notGameFacing, busy,
-                chains, threads, s_lines == 120 ? " No more of these lines this session." : "");
+                chains, threads, waits, s_lines == 120 ? " No more of these lines this session." : "");
         }
         s_last = now;
         if (static_cast<LONG>(now - s_until) >= 0)
