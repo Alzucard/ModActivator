@@ -766,6 +766,21 @@ static void readController(bool menuOpen) {
   before = held;
 }
 
+// Each opening and closing, and what did it, so a menu that opens and
+// closes by itself shows who is pressing. The first 40 of a session are
+// written, then every 50th with the count.
+static void logToggle(bool opened, const char *cause, unsigned buttons = 0) {
+  static unsigned count = 0;
+  ++count;
+  if (count > 40 && count % 50)
+    return;
+  if (buttons)
+    LOG("[menu] %s by %s (buttons held 0x%X)%s", opened ? "opened" : "closed", cause, buttons,
+        count > 40 ? (" - toggle " + std::to_string(count) + " this session").c_str() : "");
+  else
+    LOG("[menu] %s by %s%s", opened ? "opened" : "closed", cause,
+        count > 40 ? (" - toggle " + std::to_string(count) + " this session").c_str() : "");
+}
 void PollToggle() {
   static bool was = false;
   static bool escapeWas = false;
@@ -795,14 +810,22 @@ void PollToggle() {
                                  !s.sendingShortcut;
     if (((now && !was) || padEdge) && acceptsShortcut) {
       s.menuOpen = !s.menuOpen;
+      if (padEdge)
+        logToggle(s.menuOpen, "the controller shortcut", padButtonsHeld(framePad));
+      else
+        logToggle(s.menuOpen, "the keyboard shortcut");
       if (s.menuOpen)
         refreshRequested.store(true);
     }
     const bool escape = held(VK_ESCAPE);
-    if (s.menuOpen && escape && !escapeWas && acceptsShortcut)
+    if (s.menuOpen && escape && !escapeWas && acceptsShortcut) {
       s.menuOpen = false;
+      logToggle(false, "Escape");
+    }
     escapeWas = escape;
   } else {
+    if (s.menuOpen)
+      logToggle(false, "the game window losing focus");
     s.menuOpen = false;
     UI::recording = 0;
     escapeWas = held(VK_ESCAPE);

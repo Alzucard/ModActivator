@@ -1,5 +1,8 @@
 # Changelog
 
+## Unreleased
+- Log more for menus that blink: each opening and closing and what caused it (keyboard, controller and the buttons held, Escape, losing focus); for 20 seconds after each opening, a line a second with how many frames came through, how many the menu was drawn on, and why the rest were not; the frame generation libraries loaded; and, when another mod's Present hook rules out the swapchain wrapper, that `WrapSwapChain` does not apply.
+
 ## 1.3.3
 - Show the menu with DLSS frame generation on without editing anything: `WrapSwapChain` now defaults to `auto`, which draws the menu before frame generation whenever the game loads NVIDIA's Streamline. `1` and `0` still force it on or off. An update from 1.3 does not carry over its shipped `WrapSwapChain=0`. Values are read as before (`1 ; note` is still 1), and `true`/`false`, `on`/`off` work too. Not possible alongside Crimson Route. Should the wrapper turn down the game's swapchain, ModActivator falls back to drawing on the finished frames rather than not at all.
 

@@ -959,12 +959,103 @@ namespace ml::hooks
         return true;
     }
 
+    // --- What happens to each frame while the menu is open ---------------------
+    // A menu that blinks is drawn on some presented frames and not on others,
+    // or opens and closes by itself. Neither showed in the log, so for 20
+    // seconds after each opening a line a second says how many frames came
+    // through, how many the menu was drawn on, and why the others were not.
+    // At most 120 such lines a session. The frame generation libraries loaded
+    // are written at each opening when they changed, since frame generation
+    // presenting frames this mod never sees is the other way to blink.
+    struct FrameStats
+    {
+        std::atomic<unsigned> presents{0}, notGameWindow{0}, notGameFacing{0}, busy{0},
+            closed{0}, drawn{0}, notDrawn{0}, chainSwitches{0}, threadSwitches{0};
+    };
+    static FrameStats g_frameStats;
+
+    // Counted by the ReShade path, which refuses other windows before
+    // RenderOverlay is reached.
+    static void CountNotGameWindow() { g_frameStats.notGameWindow.fetch_add(1, std::memory_order_relaxed); }
+
+    static void LogFrameGenerationModules()
+    {
+        static const char* const kModules[] = {
+            "sl.interposer.dll", "sl.dlss_g.dll", "nvngx_dlssg.dll",
+            "amd_fidelityfx_loader_dx12.dll", "amd_fidelityfx_framegeneration_dx12.dll",
+            "libxess_fg.dll", "OptiScaler.dll", "nvngx.dll" };
+        std::string loaded;
+        for (const char* m : kModules)
+            if (GetModuleHandleA(m))
+                loaded += (loaded.empty() ? "" : ", ") + std::string(m);
+        static std::string s_last = "?";
+        if (loaded == s_last)
+            return;
+        s_last = loaded;
+        LOG("[frames] frame generation libraries loaded: %s.",
+            loaded.empty() ? "none" : loaded.c_str());
+    }
+
+    // Called once a frame from RenderOverlayFrame, after the toggle is read.
+    static void FrameReport(bool open)
+    {
+        static bool s_wasOpen = false;
+        static DWORD s_until = 0, s_last = 0;
+        static unsigned s_lines = 0;
+        const DWORD now = GetTickCount();
+        if (open && !s_wasOpen)
+        {
+            LogFrameGenerationModules();
+            if (!s_until)
+                s_last = now;
+            s_until = now + 20000;
+        }
+        s_wasOpen = open;
+        if (!s_until || static_cast<LONG>(now - s_last) < 1000)
+            return;
+        auto& f = g_frameStats;
+        const auto take = [](std::atomic<unsigned>& n) { return n.exchange(0, std::memory_order_relaxed); };
+        const unsigned presents = take(f.presents), notGameWindow = take(f.notGameWindow),
+                       notGameFacing = take(f.notGameFacing), busy = take(f.busy),
+                       closed = take(f.closed), drawn = take(f.drawn), notDrawn = take(f.notDrawn),
+                       chains = take(f.chainSwitches), threads = take(f.threadSwitches);
+        if (s_lines < 120)
+        {
+            ++s_lines;
+            LOG("[frames] %.1f s: %u presents; menu drawn on %u, draw failed on %u, menu closed on %u, "
+                "skipped: %u another window, %u not the game's frames, %u still drawing the last one; "
+                "%u swapchain switches, %u thread switches.%s",
+                (now - s_last) / 1000.0, presents, drawn, notDrawn, closed, notGameWindow, notGameFacing, busy,
+                chains, threads, s_lines == 120 ? " No more of these lines this session." : "");
+        }
+        s_last = now;
+        if (static_cast<LONG>(now - s_until) >= 0)
+            s_until = 0;
+    }
+
     // Init-if-needed and draw the overlay into swapChain's current back buffer.
     // Returns whether a frame was actually submitted (for the post-present device
     // check). isGameFacing is false for native presents while a wrapper owns the
     // drawing - those are Streamline's read-only finished frames, left untouched.
+    static bool RenderOverlayFrameInner(IDXGISwapChain3* swapChain, bool isGameFacing, UINT flags,
+                              ID3D12CommandQueue* presentQueue);
     static bool RenderOverlayFrame(IDXGISwapChain3* swapChain, bool isGameFacing, UINT flags,
                               ID3D12CommandQueue* presentQueue = nullptr)
+    {
+        auto& f = g_frameStats;
+        f.presents.fetch_add(1, std::memory_order_relaxed);
+        static IDXGISwapChain3* s_chain = nullptr;
+        static DWORD s_thread = 0;
+        if (s_chain && s_chain != swapChain)
+            f.chainSwitches.fetch_add(1, std::memory_order_relaxed);
+        if (s_thread && s_thread != GetCurrentThreadId())
+            f.threadSwitches.fetch_add(1, std::memory_order_relaxed);
+        s_chain = swapChain;
+        s_thread = GetCurrentThreadId();
+        return RenderOverlayFrameInner(swapChain, isGameFacing, flags, presentQueue);
+    }
+    static bool RenderOverlayFrameInner(IDXGISwapChain3* swapChain, bool isGameFacing, UINT flags,
+                              ID3D12CommandQueue* presentQueue)
     {
         // Counted before anything can refuse: every path that could draw comes
         // through here, so this is the one number that says whether this mod is
@@ -972,7 +1063,11 @@ namespace ml::hooks
         g_presentSeen.fetch_add(1, std::memory_order_relaxed);
 
         if (!isGameFacing || (flags & DXGI_PRESENT_TEST))
+        {
+            g_frameStats.notGameFacing.fetch_add(1, std::memory_order_relaxed);
+            FrameReport(gui::WantsDraw());
             return false;
+        }
 
         if (g_initFailed || g_renderDisabled)
             return false;
@@ -981,8 +1076,11 @@ namespace ml::hooks
         // swapchains at startup. Don't take back-buffer references until the
         // player requests the overlay.
         gui::PollToggle();
-        if (!gui::WantsDraw())
+        const bool open = gui::WantsDraw();
+        FrameReport(open);
+        if (!open)
         {
+            g_frameStats.closed.fetch_add(1, std::memory_order_relaxed);
             if (g_imguiReady)
                 gui::FeedInput();
             return false;
@@ -1017,6 +1115,7 @@ namespace ml::hooks
             // This also covers XInput modules loaded after the first opening.
             hooks::EnsureXInputHooks();
             drew = DrawOverlay(swapChain);
+            (drew ? g_frameStats.drawn : g_frameStats.notDrawn).fetch_add(1, std::memory_order_relaxed);
             // Proof the render path is alive. State::Captures reads this so an
             // overlay that stops drawing releases the pad instead of holding it
             // for the rest of the session.
@@ -1040,7 +1139,10 @@ namespace ml::hooks
         // Skip that frame rather than accessing the same ImGui context twice.
         static std::atomic_flag busy = ATOMIC_FLAG_INIT;
         if (busy.test_and_set(std::memory_order_acquire))
+        {
+            g_frameStats.busy.fetch_add(1, std::memory_order_relaxed);
             return false;
+        }
         struct UnlockOnReturn
         {
             std::atomic_flag& flag;
@@ -1215,6 +1317,10 @@ namespace ml::hooks
             queue->flush_immediate_command_list();
             const bool drew = RenderOverlay(chain, true, 0, nativeQueue);
             PostPresentDeviceCheck(drew);
+        }
+        else
+        {
+            CountNotGameWindow();
         }
         chain->Release();
     }
@@ -2133,6 +2239,13 @@ namespace ml::hooks
                 s_stack = true;
                 LOG("[hook] %s is loaded and keys its work on the swapchain object it is handed: not wrapping; stacking this mod's detours instead", keying);
             }
+            // Stacking skips WrapWanted, so its line never comes. What the
+            // frame generation fix would have done is said here instead.
+            if (s_stack)
+                LOG("[hook] so WrapSwapChain does not apply: the menu draws on the finished frames%s.",
+                    GetModuleHandleA("sl.interposer.dll")
+                        ? ", and Streamline (DLSS frame generation) is loaded, so with frame generation on the menu may not show or may blink"
+                        : "; Streamline (DLSS frame generation) is not loaded");
         }
         if (ppSwapChain && *ppSwapChain)
             InstallDetoursFrom(*ppSwapChain, device, s_stack);
