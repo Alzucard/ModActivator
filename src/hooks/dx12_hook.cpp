@@ -2231,8 +2231,20 @@ namespace ml::hooks
             char owner[64] = "";
             if (DetourOwner(vt[8], owner, sizeof owner) && !BenignPresentOwner(owner))
             {
-                s_stack = true;
-                LOG("[hook] %s detoured Present before this mod and would be handed the wrapper: not wrapping; stacking this mod's detours on top of its instead", owner);
+                // Whether that mod minds being handed the wrapper is a guess
+                // drawn from Crimson Route, which does. WrapSwapChain=1 asks
+                // for the wrapper outright, so it wins over the guess; the
+                // mods known to mind are still checked by name below.
+                if (Settings::Get().wrapSwapChain == 1 && !KeyingOverlayLoaded())
+                    LOG("[hook] %s detoured Present before this mod, which would normally mean stacking instead of wrapping. "
+                        "WrapSwapChain=1 asks for the wrapper, so it is used anyway. If %s stops working, set WrapSwapChain back to auto.",
+                        owner, owner);
+                else
+                {
+                    s_stack = true;
+                    LOG("[hook] %s detoured Present before this mod and would be handed the wrapper: not wrapping; stacking this mod's detours on top of its instead%s",
+                        owner, Settings::Get().wrapSwapChain == 1 ? "" : ". WrapSwapChain=1 would wrap anyway");
+                }
             }
             else if (const char* keying = KeyingOverlayLoaded())
             {

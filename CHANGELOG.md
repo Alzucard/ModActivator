@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Let `WrapSwapChain=1` use the swapchain wrapper even when another mod (such as AmbientMixer) hooked Present first, so the menu can show with DLSS frame generation there too. Crimson Route, which is known to break with the wrapper, still prevents it. `auto` keeps the cautious choice.
 - Log more for menus that blink: each opening and closing and what caused it (keyboard, controller and the buttons held, Escape, losing focus); for 20 seconds after each opening, a line a second with how many frames came through, how many the menu was drawn on, and why the rest were not; the frame generation libraries loaded; and, when another mod's Present hook rules out the swapchain wrapper, that `WrapSwapChain` does not apply.
 
 ## 1.3.3
