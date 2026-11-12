@@ -229,18 +229,55 @@ static bool saveBinding(const Action &a, const std::string &expected,
 // frame. Render thread only. The copies keep their display strings cached
 // between frames, and new text is scanned for glyphs the atlas lacks.
 static unsigned bindingsSnapshotVersion = 0;
+// Which mods a Send button can reach, worked out with the snapshot: loaded,
+// not waiting for a restart after an edit, and not managed by ModHub (which
+// switches a managed mod's own menu key off). Lower-case module names.
+struct SendTargets {
+  std::set<std::string> ready, managed;
+};
+static SendTargets sendTargets;
+static bool anyPadBinding = false;
 static const std::vector<Action> &bindingsSnapshot() {
   static std::vector<Action> list;
   if (const unsigned current = catalogVersion.load(); current != bindingsSnapshotVersion) {
+    std::set<std::string> restarts;
     {
       std::lock_guard<std::mutex> lock(catalogMutex);
       list = allBindings;
+      restarts = restartRequired;
     }
     bindingsSnapshotVersion = current;
-    for (const auto &a : list)
+    sendTargets = {};
+    anyPadBinding = false;
+    const HMODULE modHub = GetModuleHandleA("ModHub.asi");
+    for (const auto &a : list) {
       UI::noteGlyphs(a);
+      anyPadBinding |= a.padButtons != 0;
+      const auto module = lower(a.module);
+      const HMODULE handle = GetModuleHandleA(a.module.c_str());
+      if (handle && !restarts.count(module))
+        sendTargets.ready.insert(module);
+      if (handle && modHub && module != "modhub.asi" && GetProcAddress(handle, "ModHubMenuV1"))
+        sendTargets.managed.insert(module);
+    }
   }
   return list;
+}
+// The binding that makes a mod read its config again, from the known-mods
+// list's @reload (Key, or Section/Key, in the same config file). Null when
+// the mod has none, or "live" (it needs no key).
+static const Action *reloadBinding(const Action &edited, const std::vector<Action> &list) {
+  const auto spec = lower(trimConfigLine(edited.reload));
+  if (spec.empty() || spec == "live")
+    return nullptr;
+  const auto slash = spec.find('/');
+  const auto section = slash == spec.npos ? std::string() : spec.substr(0, slash);
+  const auto key = slash == spec.npos ? spec : spec.substr(slash + 1);
+  for (const auto &a : list)
+    if (lower(a.file) == lower(edited.file) && lower(a.key) == key &&
+        (section.empty() || lower(a.section) == section))
+      return &a;
+  return nullptr;
 }
 static void drawHotkeys() {
   static Action editing;
@@ -288,15 +325,22 @@ static void drawHotkeys() {
   float available = ImGui::GetContentRegionAvail().y;
   float listHeight =
       (std::max)(70.0f, available - (selected ? 420.0f * UI::scale : 0.0f));
-  if (ImGui::BeginTable("Bindings", 4,
+  // A Controller column only when some mod has a controller binding.
+  const bool padColumn = anyPadBinding;
+  const int padAt = 2, describeAt = padColumn ? 3 : 2, statusAt = describeAt + 1,
+            sendAt = statusAt + 1;
+  if (ImGui::BeginTable("Bindings", sendAt + 1,
                         ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg |
                             ImGuiTableFlags_BordersInnerH |
                             ImGuiTableFlags_Resizable,
                         ImVec2(0, listHeight))) {
     ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthStretch, 1.25f);
     ImGui::TableSetupColumn("Shortcut", ImGuiTableColumnFlags_WidthStretch, .8f);
+    if (padColumn)
+      ImGui::TableSetupColumn("Controller", ImGuiTableColumnFlags_WidthStretch, .8f);
     ImGui::TableSetupColumn("What it does", ImGuiTableColumnFlags_WidthStretch, 1.8f);
     ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, 90 * UI::scale);
+    ImGui::TableSetupColumn("##Send", ImGuiTableColumnFlags_WidthFixed, 64 * UI::scale);
     ImGui::TableSetupScrollFreeze(0, 1);
     ImGui::TableHeadersRow();
     UI::groupedBindings(list, [&](const Action &a) {
@@ -330,9 +374,16 @@ static void drawHotkeys() {
         UI::bindingTooltip(a);
       ImGui::TableSetColumnIndex(1);
       ImGui::TextUnformatted(UI::shortcut(a).c_str());
-      ImGui::TableSetColumnIndex(2);
+      if (padColumn) {
+        ImGui::TableSetColumnIndex(padAt);
+        if (a.padButtons)
+          ImGui::TextUnformatted(padLabel(a.padButtons).c_str());
+        else
+          ImGui::TextDisabled("-");
+      }
+      ImGui::TableSetColumnIndex(describeAt);
       UI::descriptionCell(a);
-      ImGui::TableSetColumnIndex(3);
+      ImGui::TableSetColumnIndex(statusAt);
       UI::badge(a.severity == 2   ? "Conflict"
                 : a.severity == 1 ? "Overlap"
                                   : "Clear",
@@ -341,12 +392,26 @@ static void drawHotkeys() {
                                   : ImVec4(.47f, .70f, .58f, 1));
       if (a.severity && ImGui::IsItemHovered())
         ImGui::SetTooltip("%s", displayText(a.overlapNames).c_str());
+      // Press this shortcut now. A menu closes the panel so its window gets the
+      // input; anything else leaves the panel open.
+      ImGui::TableSetColumnIndex(sendAt);
+      const auto module = lower(a.module);
+      const bool managedMenu = sendTargets.managed.count(module) && !a.toggle && a.menuRank;
+      ImGui::BeginDisabled(!sendTargets.ready.count(module) || managedMenu);
+      if (ImGui::SmallButton("Send"))
+        queueAction(a, a.menuRank > 0 && !a.toggle);
+      ImGui::EndDisabled();
+      if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("%s", managedMenu ? "Open it through ModHub."
+                                : !sendTargets.ready.count(module)
+                                    ? "The mod is not loaded, or waits for a restart after an edit."
+                                    : "Press this shortcut now.");
       ImGui::PopID();
-    }, 3);
+    }, statusAt);
     ImGui::EndTable();
   }
   if (selected) {
-    ImGui::BeginChild("ShortcutEditor");
+    ImGui::BeginChild("ShortcutEditor", ImVec2(0, 0), ImGuiChildFlags_NavFlattened);
     const auto layout = gameKeyboardLayout();
     if (layout != lastLayout) {
       lastLayout = layout;
@@ -412,6 +477,45 @@ static void drawHotkeys() {
         validationError = e.what();
       }
     }
+    // A key nothing else uses that this mod's format can hold: function keys
+    // first, then with Ctrl, Shift, Alt and Ctrl+Shift.
+    ImGui::SameLine();
+    if (ImGui::Button("Pick a free key")) {
+      UI::recording = 0;
+      acknowledge = false;
+      validationError = "No free key found that this mod's setting can hold. Record one instead.";
+      const auto free = [&](const std::vector<int> &keys) {
+        if (conflict(keys, openerKeys()) || !reservedClashes(keys).empty())
+          return false;
+        return std::none_of(list.begin(), list.end(), [&](const Action &a) {
+          return cachedIdentity(a) != cachedIdentity(editing) && conflict(keys, a.cachedKeys);
+        });
+      };
+      bool picked = false;
+      for (const std::vector<int> &mods : std::vector<std::vector<int>>{
+               {}, {VK_CONTROL}, {VK_SHIFT}, {VK_MENU}, {VK_CONTROL, VK_SHIFT}}) {
+        for (int key = VK_F1; key <= VK_F12 && !picked; ++key) {
+          auto candidate = mods;
+          candidate.push_back(key);
+          try {
+            const auto value = encodeBinding(editing, "", candidate);
+            const auto keys = keysFrom(editing, value);
+            if (!free(keys))
+              continue;
+            recorded = candidate;
+            encoded = value;
+            proposed = keys;
+            validationError.clear();
+            picked = true;
+          } catch (const std::exception &) {
+          }
+        }
+        if (picked)
+          break;
+      }
+      if (!picked)
+        proposed.clear();
+    }
     if (!validationError.empty())
       ImGui::TextWrapped("%s", validationError.c_str());
     if (!proposed.empty()) {
@@ -426,6 +530,11 @@ static void drawHotkeys() {
           ImGui::TextColored(ImVec4(1, .6f, .2f, 1), "Overlaps: %s",
                              displayText(a.label).c_str());
         }
+      for (const auto &[severity, who] : reservedClashes(proposed)) {
+        clashes = true;
+        ImGui::TextColored(ImVec4(1, .6f, .2f, 1), "%s: %s",
+                           severity == 2 ? "Already used by" : "Overlaps", displayText(who).c_str());
+      }
       if (conflict(proposed, ownKeys))
         ImGui::TextWrapped("Overlaps ModActivator (%s).",
                            shortcutLabel(ownKeys).c_str());
@@ -434,21 +543,43 @@ static void drawHotkeys() {
       ImGui::BeginDisabled(UI::recording || (clashes && !acknowledge));
       if (ImGui::Button("Save hotkey")) {
         try {
+          // A mod that rereads its config needs no restart: it reads it live,
+          // or ModActivator presses its reload key right after the save. Not
+          // when the reload key itself changed: the mod still listens on the
+          // old one, which the file no longer says.
+          const bool live = lower(editing.reload) == "live";
+          const Action *reloader = live ? nullptr : reloadBinding(editing, list);
+          if (reloader && cachedIdentity(*reloader) == cachedIdentity(editing))
+            reloader = nullptr;
           bool changed;
           {
             std::lock_guard<std::mutex> lock(catalogMutex);
             changed = saveBinding(editing, snapshot, encoded);
             if (changed) {
+              if (!live && !reloader)
+                restartRequired.insert(lower(editing.module));
+              catalogChanged();
+            }
+          }
+          if (changed)
+            refreshRequested.store(true);
+          bool reloaded = false;
+          if (changed && reloader) {
+            reloaded = queueAction(*reloader, false);
+            if (!reloaded) {
+              std::lock_guard<std::mutex> lock(catalogMutex);
               restartRequired.insert(lower(editing.module));
               catalogChanged();
             }
           }
-          message = changed
-                        ? "Saved with .modactivator.bak backup. Restart the game to apply."
-                        : "Shortcut is already set to that value.";
+          message = !changed  ? "Shortcut is already set to that value."
+                    : live     ? "Saved with .modactivator.bak backup. The mod reads its config "
+                                 "while the game runs, so the new shortcut works now."
+                    : reloaded ? "Saved with .modactivator.bak backup. ModActivator pressed the "
+                                 "mod's reload key (" + UI::shortcut(*reloader) +
+                                     "), so the new shortcut works now."
+                               : "Saved with .modactivator.bak backup. Restart the game to apply.";
           selected = false;
-          if (changed)
-            refreshRequested.store(true);
         } catch (const std::exception &e) {
           message = e.what();
         }

@@ -123,6 +123,17 @@ static void loadLayout() {
                              dataPath("ModActivator.ini").c_str());
   const auto code = shortcutCode(parseShortcut(value));
   opener.store(code && (code & 0xff) != VK_ESCAPE ? code : defaultOpener);
+  // The controller shortcut, the same way. None turns it off; a single button
+  // is refused, so one press can never open the panel.
+  char pad[128]{};
+  GetPrivateProfileStringA("General", "PadOpenShortcut", "", pad, sizeof pad, path.c_str());
+  if (!pad[0])
+    GetPrivateProfileStringA("General", "PadOpenShortcut", "", pad, sizeof pad,
+                             dataPath("ModActivator.ini").c_str());
+  const unsigned padBits = padButtonsFrom(pad);
+  const bool off = !_stricmp(trimConfigLine(pad).c_str(), "none");
+  padOpener.store(off ? 0 : __builtin_popcount(padBits) >= 2 ? padBits : defaultPadOpener);
+  ml::State::Get().padShortcut.store(padOpener.load());
   const auto section = readProfileSection("ModLayout", path);
   ModLayout loaded;
   std::map<unsigned long, ModPlacement> ordered;
@@ -296,6 +307,45 @@ static bool saveOpener(const std::vector<int> &keys) {
   refreshRequested.store(true);
   return true;
 }
+// The panel's controller shortcut, saved in ModActivator.User.ini like the
+// keyboard one, as button names ("LB + RB + Back"), or None for none.
+static bool savePadOpener(unsigned bits) {
+  if (!WritePrivateProfileStringA("General", "PadOpenShortcut",
+                                  bits ? padLabel(bits).c_str() : "None",
+                                  writableUserConfig().c_str()))
+    return false;
+  padOpener.store(bits);
+  ml::State::Get().padShortcut.store(bits);
+  refreshRequested.store(true);
+  return true;
+}
+// While Settings records a controller shortcut, its buttons do not toggle
+// the panel.
+static bool padShortcutRecording = false;
+// Records a controller combination: every button held at once, taken when
+// they are all let go again. Render thread; the menu is open while it runs.
+static unsigned recordPadShortcut(bool &recording) {
+  static unsigned most = 0;
+  if (!recording) {
+    most = 0;
+    return 0;
+  }
+  XINPUT_GAMEPAD pad{};
+  if (!ml::hooks::ReadPadRaw(&pad))
+    return 0;
+  const unsigned held = padButtonsHeld(pad);
+  if (held) {
+    if (__builtin_popcount(held) >= __builtin_popcount(most))
+      most = held;
+    return 0;
+  }
+  const unsigned taken = most;
+  most = 0;
+  if (taken)
+    recording = false;
+  return taken;
+}
+
 // cardsStamp changes whenever the menu rebuilds `actions`.
 static void drawSettings(const std::vector<Action> &actions, unsigned cardsStamp) {
   static char tabName[64]{};
@@ -303,7 +353,7 @@ static void drawSettings(const std::vector<Action> &actions, unsigned cardsStamp
   static std::string status;
   static std::vector<int> proposed;
   static bool acknowledge = false;
-  ImGui::BeginChild("SettingsScroll");
+  ImGui::BeginChild("SettingsScroll", ImVec2(0, 0), ImGuiChildFlags_NavFlattened);
   ImGui::Text("ModActivator shortcut: %s", shortcutLabel(openerKeys()).c_str());
   if (auto keys = UI::recordShortcut("Record opener"); !keys.empty()) {
     proposed = std::move(keys);
@@ -316,6 +366,53 @@ static void drawSettings(const std::vector<Action> &actions, unsigned cardsStamp
     UI::recording = 0;
     acknowledge = false;
   }
+  // The same for the controller: open and close the panel with a button
+  // combination. Two buttons or more, so a single press never opens it.
+  {
+    static unsigned padProposed = 0;
+    auto &padRecording = padShortcutRecording;
+    const unsigned current = padOpener.load();
+    ImGui::Text("Controller shortcut: %s", current ? padLabel(current).c_str() : "none");
+    if (ImGui::Button(padRecording ? "Press and release a combination...##Pad" : "Record controller shortcut")) {
+      padRecording = !padRecording;
+      padProposed = 0;
+    }
+    if (const unsigned taken = recordPadShortcut(padRecording)) {
+      padProposed = taken;
+      status = __builtin_popcount(taken) < 2 ? "Use two buttons or more, such as LB + RB + Back." : "";
+      if (__builtin_popcount(taken) < 2)
+        padProposed = 0;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Controller off")) {
+      padRecording = false;
+      padProposed = 0;
+      status = savePadOpener(0) ? "Controller shortcut off." : "Could not save the controller shortcut.";
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Default##Pad")) {
+      padRecording = false;
+      padProposed = defaultPadOpener;
+    }
+    if (padProposed) {
+      ImGui::Text("New controller shortcut: %s", padLabel(padProposed).c_str());
+      for (const auto &a : bindingsSnapshot())
+        if (padConflict(padProposed, a.padButtons))
+          ImGui::TextWrapped("Overlaps %s / %s (%s)", UI::name(a).c_str(),
+                             UI::actionName(a).c_str(), padLabel(a.padButtons).c_str());
+      if (ImGui::Button("Save controller shortcut")) {
+        status = savePadOpener(padProposed) ? "Controller shortcut updated."
+                                            : "Could not save the controller shortcut.";
+        padProposed = 0;
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Discard##Pad"))
+        padProposed = 0;
+    }
+    if (!ml::Settings::Get().hookXInput)
+      ImGui::TextDisabled("HookXInput=0: the game also sees the buttons you press for it.");
+    ImGui::Separator();
+  }
   if (!proposed.empty()) {
     ImGui::Text("New shortcut: %s", shortcutLabel(proposed).c_str());
     bool clashes = false;
@@ -325,6 +422,11 @@ static void drawSettings(const std::vector<Action> &actions, unsigned cardsStamp
         ImGui::TextWrapped("Overlaps %s / %s", UI::name(a).c_str(),
                            UI::actionName(a).c_str());
       }
+    for (const auto &[severity, who] : reservedClashes(proposed)) {
+      clashes = true;
+      ImGui::TextWrapped("%s %s", severity == 2 ? "Already used by" : "Overlaps",
+                         displayText(who).c_str());
+    }
     if (clashes)
       ImGui::Checkbox("Save opener despite overlap", &acknowledge);
     ImGui::BeginDisabled(clashes && !acknowledge);

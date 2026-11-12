@@ -15,6 +15,9 @@ namespace ml
         std::atomic<bool> sendingShortcut{false};
         std::atomic<bool> menuOpen{false};
         std::atomic<DWORD> renderTid{0};     // thread that presents frames (set by the menu each frame)
+        // ModActivator's controller shortcut (pad.h bits), kept from the game
+        // while all of it is held. 0 when there is none.
+        std::atomic<unsigned> padShortcut{0};
 
         // When the overlay last actually drew a frame. The menu can only be
         // opened or closed from inside the render path, so if drawing stops

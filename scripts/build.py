@@ -32,8 +32,10 @@ sources = (sorted((base / 'src').rglob('*.cpp'))
 # Sources holding test entry points; compiled a second time for the test build.
 with_tests = {base / 'src/activator.cpp', base / 'src/hooks/input.cpp'}
 includes = [base / 'src', imgui, imgui / 'backends', base / 'vendor/minhook/include', minhook / 'hde']
+# IMGUI_IMPL_WIN32_DISABLE_GAMEPAD: the menu is handed the controller by
+# ModActivator itself (see feedController in src/activator.cpp).
 flags = ['-O2', '-DNDEBUG', '-DWIN32_LEAN_AND_MEAN', '-DNOMINMAX', '-D_CRT_SECURE_NO_WARNINGS',
-         '-fms-extensions']
+         '-DIMGUI_IMPL_WIN32_DISABLE_GAMEPAD', '-fms-extensions']
 
 
 def compile_one(job):

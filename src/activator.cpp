@@ -4,6 +4,7 @@
 #include "gui/menu.h"
 #include "hooks/dx12_hook.h"
 #include "hooks/input.h"
+#include "hooks/xinput_hook.h"
 #include "version.h"
 #include <MinHook.h>
 #include <TlHelp32.h>
@@ -52,6 +53,10 @@ struct Action {
   int typeOverride = 0;
   int menuRank = 0;
   int featureRank = 0;
+  // The kind (menu, toggle, action) was chosen, by you in Settings, by the mod
+  // or by the known-mods list, rather than guessed. Every chosen menu and
+  // toggle gets a card of its own.
+  bool chosenKind = false;
   std::string description;
   // Where description came from (a DescriptionSource in descriptions.h), and
   // the names the description sources gave: the binding's own, and the mod's
@@ -64,6 +69,14 @@ struct Action {
   // known-mods list (see ruleModifiers): "Ctrl", "Ctrl?HotkeyCtrl",
   // "=OpenKey2WithVk". Empty for none.
   std::string modifierRule;
+  // The controller combination for the same action (pad.h bits), and the
+  // setting it was read from: the value's own |suffix, or a setting beside it.
+  unsigned padButtons = 0;
+  std::string padField;
+  // How the mod takes a changed config without a restart, from the
+  // known-mods list's @reload: "live", or the key that makes it reread it.
+  // Empty: only at the next start.
+  std::string reload;
   // Strings the menu derives from the fields above, filled on first use and
   // reused every frame after. Empty means not computed yet. The fields they
   // come from are not changed once an Action is shown.
@@ -81,6 +94,8 @@ static std::string read(const Action &a) {
 }
 static bool held(int k) { return (GetAsyncKeyState(k) & 0x8000) != 0; }
 #include "shortcut_keys.h"
+#include "pad.h"
+static bool queueAction(const Action &a, bool closeMenu);
 static int vk(std::string s, HKL layout = gameKeyboardLayout(),
               unsigned *physicalScan = nullptr, bool namedDigit = false) {
   s.erase(std::remove_if(s.begin(), s.end(),
@@ -220,6 +235,11 @@ static std::vector<int> parseShortcut(std::string s,
 }
 static constexpr unsigned defaultOpener = VK_BACK | (1u << 8) | (1u << 9);
 static std::atomic<unsigned> opener{defaultOpener};
+// The panel's controller shortcut (pad.h bits), 0 for none. LB + RB + Back by
+// default: hold both bumpers, then press Back, which the game then never sees.
+static constexpr unsigned defaultPadOpener =
+    XINPUT_GAMEPAD_LEFT_SHOULDER | XINPUT_GAMEPAD_RIGHT_SHOULDER | XINPUT_GAMEPAD_BACK;
+static std::atomic<unsigned> padOpener{defaultPadOpener};
 static unsigned shortcutCode(const std::vector<int> &keys) {
   if (!validShortcut(keys))
     return 0;
@@ -504,16 +524,20 @@ static DWORD WINAPI dispatch(void *) {
   }
   return 0;
 }
-static bool queueAction(const Action &a) {
+// Sends a binding's shortcut once the panel is out of the way. closeMenu for
+// one that opens a window of its own, which needs the keyboard and mouse:
+// a mod menu card. Toggles and plain actions keep the panel open.
+static bool queueAction(const Action &a, bool closeMenu) {
   std::lock_guard<std::mutex> lock(catalogMutex);
   constexpr size_t queueLimit = 8;
   if (pendingActions.size() >= queueLimit || restartRequired.count(lower(a.module)))
     return false;
   pendingActions.push_back(a);
-  if (!a.toggle)
+  if (closeMenu)
     ml::State::Get().menuOpen = false;
   return true;
 }
+static bool queueAction(const Action &a) { return queueAction(a, !a.toggle); }
 namespace ml::gui {
 static float clampScale(float scale) { return (std::max)(0.8f, (std::min)(1.7f, scale)); }
 // Set by SetDisplayHeight when the swapchain's height implies another UI
@@ -686,13 +710,55 @@ void RebuildFonts() {
   BuildFonts();
   UI::glyphsChanged = false;
 }
+// The controller, read once a frame by PollToggle for the panel's controller
+// shortcut and handed to the menu by FeedInput. Render thread only.
+static XINPUT_GAMEPAD framePad{};
+static bool framePadConnected = false;
+// LB or RB pressed and released on its own while the menu is open: the
+// previous or the next tab. Used up by Render.
+static int padTabStep = 0;
+
+static void readController(bool menuOpen) {
+  const unsigned shortcut = padOpener.load();
+  framePadConnected = false;
+  if (!shortcut && !menuOpen)
+    return; // nothing uses the controller: leave XInput alone
+  // In before the menu is first opened, so the shortcut's last button is
+  // kept from the game from the start.
+  if (shortcut)
+    hooks::EnsureXInputHooks();
+  framePadConnected = hooks::ReadPadRaw(&framePad);
+  const unsigned held = framePadConnected ? padButtonsHeld(framePad) : 0;
+  static unsigned before = 0, alone = 0;
+  constexpr unsigned lb = XINPUT_GAMEPAD_LEFT_SHOULDER, rb = XINPUT_GAMEPAD_RIGHT_SHOULDER;
+  const unsigned pressed = held & ~before;
+  if (!before && (pressed == lb || pressed == rb))
+    alone = pressed;
+  else if (held & ~alone)
+    alone = 0; // another button joined in: a combination, not a tab step
+  if (alone && !held) {
+    if (menuOpen)
+      padTabStep = alone == lb ? -1 : 1;
+    alone = 0;
+  }
+  before = held;
+}
+
 void PollToggle() {
   static bool was = false;
   static bool escapeWas = false;
+  static bool padWas = false;
   const auto code = opener.load();
-  const bool now = held(code & 0xff) && heldModifiers() == (code & ~0xffu) &&
-                   !held(VK_LWIN) && !held(VK_RWIN);
   auto &s = State::Get();
+  readController(s.menuOpen);
+  const unsigned padCode = padOpener.load();
+  const bool padNow = padCode && framePadConnected &&
+                      (padButtonsHeld(framePad) & padCode) == padCode;
+  const bool now = (held(code & 0xff) && heldModifiers() == (code & ~0xffu) &&
+                    !held(VK_LWIN) && !held(VK_RWIN)) ||
+                   padNow;
+  const bool padEdge = padNow && !padWas;
+  padWas = padNow;
   if (State::ForegroundIsOurs()) {
     static HKL lastLayout = nullptr;
     if (s.menuOpen) {
@@ -703,8 +769,9 @@ void PollToggle() {
     }
     const bool textEditing = s.menuOpen && ImGui::GetCurrentContext() &&
                              ImGui::GetIO().WantTextInput;
-    const bool acceptsShortcut = !UI::recording && !textEditing && !s.sendingShortcut;
-    if (now && !was && acceptsShortcut) {
+    const bool acceptsShortcut = !UI::recording && !padShortcutRecording && !textEditing &&
+                                 !s.sendingShortcut;
+    if (((now && !was) || padEdge) && acceptsShortcut) {
       s.menuOpen = !s.menuOpen;
       if (s.menuOpen)
         refreshRequested.store(true);
@@ -723,6 +790,59 @@ void PollToggle() {
   was = now;
 }
 bool WantsDraw() { return State::Get().menuOpen; }
+// The controller as Dear ImGui's gamepad navigation: the d-pad or left stick
+// moves between items, A presses, B backs out, Y and X as ImGui assigns them.
+// The Win32 backend's own gamepad reading is compiled out
+// (IMGUI_IMPL_WIN32_DISABLE_GAMEPAD), since its XInput calls come through
+// ModActivator's detour, which hands everyone a neutral pad while the menu is
+// open; this feeds the real one instead.
+static void feedController(ImGuiIO &io, bool use) {
+  static bool fed = false;
+  if (!use) {
+    if (fed) {
+      // Let go of everything once, so nothing stays held.
+      for (int k = ImGuiKey_GamepadStart; k <= ImGuiKey_GamepadRStickDown; ++k)
+        io.AddKeyAnalogEvent(static_cast<ImGuiKey>(k), false, 0.0f);
+      io.BackendFlags &= ~ImGuiBackendFlags_HasGamepad;
+      fed = false;
+    }
+    return;
+  }
+  fed = true;
+  io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
+  io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
+  const auto &pad = framePad;
+  const auto button = [&](ImGuiKey key, WORD bit) { io.AddKeyEvent(key, (pad.wButtons & bit) != 0); };
+  button(ImGuiKey_GamepadStart, XINPUT_GAMEPAD_START);
+  button(ImGuiKey_GamepadBack, XINPUT_GAMEPAD_BACK);
+  button(ImGuiKey_GamepadFaceLeft, XINPUT_GAMEPAD_X);
+  button(ImGuiKey_GamepadFaceRight, XINPUT_GAMEPAD_B);
+  button(ImGuiKey_GamepadFaceUp, XINPUT_GAMEPAD_Y);
+  button(ImGuiKey_GamepadFaceDown, XINPUT_GAMEPAD_A);
+  button(ImGuiKey_GamepadDpadLeft, XINPUT_GAMEPAD_DPAD_LEFT);
+  button(ImGuiKey_GamepadDpadRight, XINPUT_GAMEPAD_DPAD_RIGHT);
+  button(ImGuiKey_GamepadDpadUp, XINPUT_GAMEPAD_DPAD_UP);
+  button(ImGuiKey_GamepadDpadDown, XINPUT_GAMEPAD_DPAD_DOWN);
+  button(ImGuiKey_GamepadL1, XINPUT_GAMEPAD_LEFT_SHOULDER);
+  button(ImGuiKey_GamepadR1, XINPUT_GAMEPAD_RIGHT_SHOULDER);
+  button(ImGuiKey_GamepadL3, XINPUT_GAMEPAD_LEFT_THUMB);
+  button(ImGuiKey_GamepadR3, XINPUT_GAMEPAD_RIGHT_THUMB);
+  const auto analog = [&](ImGuiKey key, float value, float dead, float full) {
+    const float v = (std::min)(1.0f, (std::max)(0.0f, (value - dead) / (full - dead)));
+    io.AddKeyAnalogEvent(key, v > 0.1f, v);
+  };
+  analog(ImGuiKey_GamepadL2, pad.bLeftTrigger, XINPUT_GAMEPAD_TRIGGER_THRESHOLD, 255);
+  analog(ImGuiKey_GamepadR2, pad.bRightTrigger, XINPUT_GAMEPAD_TRIGGER_THRESHOLD, 255);
+  constexpr float dead = XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE, full = 32767;
+  analog(ImGuiKey_GamepadLStickLeft, -pad.sThumbLX, dead, full);
+  analog(ImGuiKey_GamepadLStickRight, pad.sThumbLX, dead, full);
+  analog(ImGuiKey_GamepadLStickUp, pad.sThumbLY, dead, full);
+  analog(ImGuiKey_GamepadLStickDown, -pad.sThumbLY, dead, full);
+  analog(ImGuiKey_GamepadRStickLeft, -pad.sThumbRX, dead, full);
+  analog(ImGuiKey_GamepadRStickRight, pad.sThumbRX, dead, full);
+  analog(ImGuiKey_GamepadRStickUp, pad.sThumbRY, dead, full);
+  analog(ImGuiKey_GamepadRStickDown, -pad.sThumbRY, dead, full);
+}
 void FeedInput() {
   auto &s = State::Get();
   auto &io = ImGui::GetIO();
@@ -744,6 +864,7 @@ void FeedInput() {
   }
   if (c)
     input::FeedInput(io);
+  feedController(io, c && framePadConnected);
 }
 // The menu's copy of the cards, taken when the catalog or the card order
 // changes rather than every frame, with what each card needs worked out once:
@@ -752,6 +873,8 @@ void FeedInput() {
 struct CardState {
   int tab = 0;
   bool loaded = false, managed = false, restart = false;
+  // The mod has other cards too, so this one is titled with its action.
+  bool several = false;
 };
 struct MenuSnapshot {
   unsigned catalog = 0, layout = 0, stamp = 0;
@@ -789,6 +912,11 @@ static const MenuSnapshot &menuSnapshot() {
     ++snap.counts[card.tab];
     UI::noteGlyphs(a);
   }
+  std::map<std::string, int> perModule;
+  for (const auto &a : snap.actions)
+    ++perModule[lower(a.module)];
+  for (size_t i = 0; i < snap.actions.size(); ++i)
+    snap.cards[i].several = perModule[lower(snap.actions[i].module)] > 1;
   for (const auto &[id, name] : modLayout.tabs)
     UI::noteGlyphs(name);
   snap.catalog = catalogNow;
@@ -840,13 +968,24 @@ void Render() {
                            ImGuiTabBarFlags_NoCloseWithMiddleMouseButton |
                                ImGuiTabBarFlags_FittingPolicyScroll)) {
       static int lastTab = -1;
+      // LB and RB on their own step through the tabs.
+      int padTab = -1;
+      if (padTabStep && !tabs.empty()) {
+        std::vector<int> order;
+        for (const auto &[id, name] : tabs)
+          order.push_back(id);
+        const auto at = std::find(order.begin(), order.end(), lastTab);
+        const int index = at == order.end() ? 0 : int(at - order.begin());
+        padTab = order[(index + padTabStep + int(order.size())) % int(order.size())];
+        padTabStep = 0;
+      }
       for (const auto &[tab, name] : tabs) {
         const auto counted = counts.find(tab);
         const std::string count = tab == 2 || tab == settingsTab
                                       ? "" : "  " + std::to_string(counted == counts.end() ? 0 : counted->second);
         const std::string title = name + count + "###Category" + std::to_string(tab);
         if (ImGui::BeginTabItem(title.c_str(), nullptr,
-                                previewMode && previewTab == tab
+                                (previewMode && previewTab == tab) || padTab == tab
                                     ? ImGuiTabItemFlags_SetSelected
                                     : 0)) {
           if (lastTab != tab) {
@@ -864,7 +1003,7 @@ void Render() {
           ImGui::Spacing();
           ImGui::TextDisabled("Drag the handle on a mod to reorder it.");
           ImGui::Spacing();
-          ImGui::BeginChild("ModList", ImVec2(0, -34 * u), false);
+          ImGui::BeginChild("ModList", ImVec2(0, -34 * u), ImGuiChildFlags_NavFlattened);
           int count = 0;
           PlacementDrop drop;
           static bool reorderFailed = false;
@@ -879,7 +1018,8 @@ void Render() {
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12 * u, 5 * u));
             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(10 * u, 3 * u));
             // The list owns scrolling, including when the cursor is over a card.
-            ImGui::BeginChild("Card", ImVec2(0, 55 * u), true,
+            ImGui::BeginChild("Card", ImVec2(0, 55 * u),
+                              ImGuiChildFlags_Borders | ImGuiChildFlags_NavFlattened,
                               ImGuiWindowFlags_NoScrollbar |
                                   ImGuiWindowFlags_NoScrollWithMouse);
             const float top = ImGui::GetCursorPosY();
@@ -894,7 +1034,8 @@ void Render() {
             ImGui::PushClipRect(ImGui::GetCursorScreenPos(),
                                 ImVec2(ImGui::GetCursorScreenPos().x + textWidth,
                                        ImGui::GetWindowPos().y + 55 * u), true);
-            ImGui::TextUnformatted(UI::name(a).c_str());
+            const auto title = card.several ? UI::name(a) + " - " + UI::actionName(a) : UI::name(a);
+            ImGui::TextUnformatted(title.c_str());
             ImGui::SetCursorPosX(labelX);
             std::string detail = UI::shortcut(a);
             if (restart)
@@ -1428,6 +1569,138 @@ ModActivatorDescribeTest(const char *root, const char *modules, char *out, int c
   memcpy(out, report.c_str(), report.size() + 1);
   return (int)report.size();
 }
+// What the menu is built from, for the given modules under root: the cards
+//   card|file|section|key
+// and every binding with its conflicts and controller buttons
+//   binding|file|section|key|severity|who (joined with ;)|controller label
+extern "C" __declspec(dllexport) int
+ModActivatorCatalogTest(const char *root, const char *modules, char *out, int capacity) {
+  if (!folder.empty() || !root || !modules || !out || capacity < 1)
+    return -1;
+  folder = root;
+  std::vector<std::string> names;
+  std::stringstream list(modules);
+  for (std::string name; std::getline(list, name, ';');)
+    names.push_back(name);
+  std::string report;
+  try {
+    auto all = scanBindings(names);
+    for (const auto &a : chooseCards(all))
+      report += "card|" + a.file + "|" + a.section + "|" + a.key + "\n";
+    markConflicts(all, loadReservedKeys());
+    for (const auto &a : all) {
+      auto who = a.overlapNames;
+      std::replace(who.begin(), who.end(), '\n', ';');
+      report += "binding|" + a.file + "|" + a.section + "|" + a.key + "|" +
+                std::to_string(a.severity) + "|" + who + "|" + padLabel(a.padButtons) + "\n";
+    }
+  } catch (...) {
+    folder.clear();
+    return -2;
+  }
+  folder.clear();
+  if ((int)report.size() >= capacity)
+    return -3;
+  memcpy(out, report.c_str(), report.size() + 1);
+  return (int)report.size();
+}
+
+// Controller spellings, the reload key lookup and the panel's controller
+// shortcut. root is an empty folder.
+extern "C" __declspec(dllexport) int ModActivatorControllerTest(const char *root) {
+  if (!folder.empty() || !root)
+    return -1;
+  constexpr unsigned lb = XINPUT_GAMEPAD_LEFT_SHOULDER, rb = XINPUT_GAMEPAD_RIGHT_SHOULDER;
+  struct Case {
+    const char *text;
+    unsigned bits;
+  };
+  const Case cases[] = {
+      {"LeftStick,RightStick,A", XINPUT_GAMEPAD_LEFT_THUMB | XINPUT_GAMEPAD_RIGHT_THUMB | XINPUT_GAMEPAD_A},
+      {"BACK+LS", XINPUT_GAMEPAD_BACK | XINPUT_GAMEPAD_LEFT_THUMB},
+      {"L1+Down", lb | XINPUT_GAMEPAD_DPAD_DOWN},
+      {"dpad_down+a", XINPUT_GAMEPAD_DPAD_DOWN | XINPUT_GAMEPAD_A},
+      {"Cross", XINPUT_GAMEPAD_A},
+      {"LT + RB", padLeftTrigger | rb},
+      {"0040", XINPUT_GAMEPAD_LEFT_THUMB},  // XInput bits, four hex digits
+      {"0x0001", XINPUT_GAMEPAD_DPAD_UP},
+      {"32768", XINPUT_GAMEPAD_Y},          // decimal
+      {"1", 0},                             // an on/off flag, not a button
+      {"0", 0}, {"None", 0}, {"", 0},
+      {"A+Banana", 0},                      // one unknown word: none of it
+  };
+  for (const auto &c : cases)
+    if (padButtonsFrom(c.text) != c.bits)
+      return 1;
+  if (padLabel(lb | rb | XINPUT_GAMEPAD_BACK) != "LB + RB + Back" ||
+      padButtonsFrom(padLabel(lb | rb | XINPUT_GAMEPAD_BACK)) != (lb | rb | XINPUT_GAMEPAD_BACK))
+    return 2;
+  if (padConflict(lb | XINPUT_GAMEPAD_A, XINPUT_GAMEPAD_A) != 1 ||
+      padConflict(XINPUT_GAMEPAD_A, XINPUT_GAMEPAD_A) != 2 ||
+      padConflict(XINPUT_GAMEPAD_A, XINPUT_GAMEPAD_B) != 0 || padConflict(0, XINPUT_GAMEPAD_A))
+    return 3;
+
+  // The reload key a mod names, in the same config file.
+  Action edited{"x", "Mod.asi", "Mod.ini", "Hotkeys", "PrivateHotkey"};
+  edited.reload = "ReloadKey";
+  const std::vector<Action> bindings{
+      {"other", "Other.asi", "Other.ini", "Hotkeys", "ReloadKey"},
+      {"reload", "Mod.asi", "Mod.ini", "Hotkeys", "ReloadKey"}};
+  const Action *reloader = reloadBinding(edited, bindings);
+  if (!reloader || reloader->label != "reload")
+    return 4;
+  edited.reload = "Other/ReloadKey";
+  if (reloadBinding(edited, bindings))
+    return 5;
+  edited.reload = "live";
+  if (reloadBinding(edited, bindings))
+    return 6;
+
+  // The panel's controller shortcut: yours, then ModActivator.ini's, then the
+  // default; None turns it off, and a single button is not accepted.
+  folder = root;
+  const int result = [&] {
+    ensureDataFolder();
+    const auto user = userConfigPath(), shipped = dataPath("ModActivator.ini");
+    const auto loaded = [&](const char *mine, const char *theirs) {
+      WritePrivateProfileStringA("General", "PadOpenShortcut", mine, user.c_str());
+      WritePrivateProfileStringA("General", "PadOpenShortcut", theirs, shipped.c_str());
+      loadLayout();
+      return padOpener.load();
+    };
+    if (loaded(nullptr, nullptr) != defaultPadOpener)
+      return 7;
+    if (loaded(nullptr, "Back+Start") != (XINPUT_GAMEPAD_BACK | XINPUT_GAMEPAD_START))
+      return 8;
+    if (loaded("LB+Y", "Back+Start") != (lb | XINPUT_GAMEPAD_Y))
+      return 9;
+    if (loaded("None", nullptr) != 0 || ml::State::Get().padShortcut.load() != 0)
+      return 10;
+    if (loaded("A", nullptr) != defaultPadOpener)
+      return 11;
+    // What Settings saves goes to your file, not ModActivator.ini, and loads.
+    WritePrivateProfileStringA("General", "PadOpenShortcut", "Back+Start", shipped.c_str());
+    if (!savePadOpener(lb | XINPUT_GAMEPAD_X))
+      return 12;
+    padOpener.store(0);
+    loadLayout();
+    char kept[64]{};
+    GetPrivateProfileStringA("General", "PadOpenShortcut", "", kept, sizeof kept, shipped.c_str());
+    if (padOpener.load() != (lb | XINPUT_GAMEPAD_X) || std::string(kept) != "Back+Start" ||
+        ml::State::Get().padShortcut.load() != (lb | XINPUT_GAMEPAD_X))
+      return 13;
+    return 0;
+  }();
+  folder.clear();
+  padOpener.store(defaultPadOpener);
+  ml::State::Get().padShortcut.store(0);
+  opener.store(defaultOpener);
+  modLayout = {};
+  ++layoutVersion;
+  refreshRequested.store(false);
+  return result;
+}
+
 // The test build describes one of its own fixture bindings, so the mod
 // export is read end to end: tests/test_descriptions.py puts a config named
 // after this DLL beside the fixtures.

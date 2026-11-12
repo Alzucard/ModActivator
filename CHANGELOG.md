@@ -1,6 +1,13 @@
 # Changelog
 
 ## Unreleased
+- Give every shortcut that you (with **Show as**), the mod or the known-mods list marks as a menu or a toggle a card of its own, so a mod is no longer limited to one of each. Cards of a mod with several are titled with their action.
+- Add **Send** to every row in the Hotkeys tab, to press any shortcut right away. Menus close the panel; anything else leaves it open.
+- Count keys reserved outside the mods as conflicts: Steam's default screenshot (F12) and overlay (Shift+Tab) keys and Windows' Alt+Tab, Alt+F4, Ctrl+Shift+Esc and Print Screen, from a new `[@reserved]` section of the known-mods list, plus your own under `[ReservedKeys]` in `ModActivator.User.ini`. F4 alone is not taken for Alt+F4.
+- Add **Pick a free key** to the shortcut editor: the first function key, alone or with Ctrl, Shift, Alt or Ctrl+Shift, that nothing uses and the mod's setting can hold.
+- Keep a mod's buttons working after an edit when the known-mods list says it rereads its config (`@reload = live`, Crimson Collection), and press its reload key after saving when it has one (`@reload = ReloadKey`: Private Storage Anywhere, Waypoint Route, DesertLink Speedster).
+- Read the controller buttons mods keep with their shortcuts (`F8|LeftStick,RightStick,A`, `PadToggle=BACK+LS`, `StanceCycleButtons=L1+Down`, XInput bits such as `0040`), show them in a Controller column, and check them for conflicts with each other and with ModActivator's own.
+- Open and close the panel with a controller: LB + RB + Back by default, kept from the game while held, set in Settings or with `PadOpenShortcut`. Navigate the panel with the d-pad or left stick, A and B, and change tab with LB or RB.
 - Keep every ModActivator file except the plugin in a `ModActivator` folder inside `bin64`: the settings, your menu choices, the known-mods list, the log and the documentation. `ModActivator.asi` stays in `bin64`, where the ASI loader looks. The first start moves an older version's files into the folder, carries your `[General]` options into the new `ModActivator.ini`, and renames the old one `ModActivator.ini.moved`.
 - Save everything set in the menu (panel shortcut, binding types, tabs, card order, names and notes) in `ModActivator.User.ini` instead of `ModActivator.ini`. No release ships that file, so an update, which replaces `ModActivator.ini`, no longer resets them. The first start copies an older `ModActivator.ini`'s choices over once.
 - Name and describe any shortcut yourself in the Hotkeys tab. Your words win over every other source.

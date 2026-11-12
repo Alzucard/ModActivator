@@ -27,14 +27,37 @@ namespace ml::hooks
         s->dwPacketNumber = packet + 1;
     }
 
+    // While every button of ModActivator's controller shortcut is held, those
+    // buttons are kept from the game, so the press that completes it (and the
+    // hold that follows) does not also act in the game.
+    static void MaskShortcut(XINPUT_STATE* s)
+    {
+        const unsigned mask = State::Get().padShortcut.load();
+        if (!mask)
+            return;
+        auto& pad = s->Gamepad;
+        const unsigned held = pad.wButtons |
+            (pad.bLeftTrigger >= 64 ? (1u << 16) : 0) | (pad.bRightTrigger >= 64 ? (1u << 17) : 0);
+        if ((held & mask) != mask)
+            return;
+        pad.wButtons &= static_cast<WORD>(~mask);
+        if (mask & (1u << 16)) pad.bLeftTrigger = 0;
+        if (mask & (1u << 17)) pad.bRightTrigger = 0;
+    }
+
     // A distinct detour per module so each can call the matching trampoline
     // (MinHook can't tell us which target a shared detour was invoked for).
     #define ML_XINPUT_DETOUR(NAME, ORIG)                              \
         static DWORD WINAPI NAME(DWORD i, XINPUT_STATE* s)                 \
         {                                                                  \
             const DWORD r = ORIG(i, s);                                    \
-            if (r == ERROR_SUCCESS && s && State::Get().Captures())       \
-                Neutralize(s);                                             \
+            if (r == ERROR_SUCCESS && s)                                   \
+            {                                                              \
+                if (State::Get().Captures())                               \
+                    Neutralize(s);                                         \
+                else                                                       \
+                    MaskShortcut(s);                                       \
+            }                                                              \
             return r;                                                      \
         }
     ML_XINPUT_DETOUR(hk_1_4,   o_1_4)
@@ -116,5 +139,59 @@ namespace ml::hooks
 
         if (!anyPending)
             s_allDone = true;
+    }
+
+    // Our own reads go to the trampolines, which reach XInput without the
+    // detours; without hooks (HookXInput=0, or before they are in), straight
+    // to the module's export, which is then not detoured either.
+    static XInputGetState_t RawGetState()
+    {
+        if (o_1_4) return o_1_4;
+        if (o_1_3) return o_1_3;
+        if (o_9_1_0) return o_9_1_0;
+        static XInputGetState_t direct = nullptr;
+        static bool looked = false;
+        if (!looked)
+        {
+            looked = true;
+            HMODULE mod = GetModuleHandleW(L"xinput1_4.dll");
+            if (!mod) mod = GetModuleHandleW(L"xinput1_3.dll");
+            if (!mod) mod = LoadLibraryW(L"xinput1_4.dll");
+            if (mod) direct = reinterpret_cast<XInputGetState_t>(GetProcAddress(mod, "XInputGetState"));
+        }
+        // Once our detour is in, the checks above find its trampoline first.
+        return direct;
+    }
+
+    bool ReadPadRaw(XINPUT_GAMEPAD* out)
+    {
+        static int slot = -1;     // the connected controller, or -1
+        static DWORD nextLook = 0;
+        const auto get = RawGetState();
+        if (!get)
+            return false;
+        XINPUT_STATE state = {};
+        if (slot >= 0)
+        {
+            if (get(static_cast<DWORD>(slot), &state) == ERROR_SUCCESS)
+            {
+                *out = state.Gamepad;
+                return true;
+            }
+            slot = -1;
+            nextLook = 0;
+        }
+        const DWORD now = GetTickCount();
+        if (nextLook && static_cast<LONG>(now - nextLook) < 0)
+            return false;
+        nextLook = now + 2000;
+        for (DWORD i = 0; i < XUSER_MAX_COUNT; ++i)
+            if (get(i, &state) == ERROR_SUCCESS)
+            {
+                slot = static_cast<int>(i);
+                *out = state.Gamepad;
+                return true;
+            }
+        return false;
     }
 }

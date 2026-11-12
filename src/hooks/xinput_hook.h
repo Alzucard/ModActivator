@@ -14,4 +14,11 @@ namespace ml::hooks
     // loaded (the game often inits its input system after we do) and becomes a
     // no-op once every known module is accounted for.
     void EnsureXInputHooks();
+
+    // The first connected controller as it really is, for ModActivator's own
+    // use (its controller shortcut and menu navigation): not neutralised
+    // while the menu is open, and not masked. False with no controller.
+    // Disconnected slots are looked for again only every two seconds, since
+    // asking XInput about an empty slot is slow.
+    bool ReadPadRaw(XINPUT_GAMEPAD* out);
 }

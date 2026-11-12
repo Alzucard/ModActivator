@@ -94,12 +94,19 @@ struct KnownBinding {
   std::string section, key; // lower case; section empty for any, "x*" for a prefix
   BindingInfo info;
   std::string modifiers; // Action::modifierRule, as written in the file
+  std::string padField;  // the setting holding its controller combination, if not found by name
 };
 struct KnownMod {
   std::string file; // lower case, '/' separated
   std::string name, about;
   bool hexNumbers = false;
+  // @reload: "live" when the mod reads its config while the game runs, or the
+  // key (Section/Key or Key, in the same file) that makes it read it again.
+  std::string reload;
   std::vector<KnownBinding> bindings;
+  // In the [@reserved] section only: keys something other than a mod uses
+  // (Steam, Windows), as spelled in the file, with what uses them.
+  std::vector<std::pair<std::string, std::string>> reserved;
 };
 using KnownMods = std::vector<KnownMod>;
 
@@ -140,16 +147,21 @@ static KnownMods parseKnownMods(const std::string &text) {
     auto &mod = mods.back();
     const auto field = trimConfigLine(line.substr(0, equals));
     const auto value = trimConfigLine(line.substr(equals + 1));
-    if (field == "@mod") {
+    if (mod.file == "@reserved") {
+      mod.reserved.emplace_back(field, value);
+    } else if (field == "@reload") {
+      mod.reload = value;
+    } else if (field == "@mod") {
       const auto parts = splitFields(value, 2);
       mod.name = parts[0];
       mod.about = parts[1];
     } else if (field == "@numbers") {
       mod.hexNumbers = lower(value) == "hex";
     } else if (field[0] != '@') {
-      const auto parts = splitFields(value, 4);
+      const auto parts = splitFields(value, 5);
       KnownBinding binding;
       binding.modifiers = parts[3];
+      binding.padField = parts[4];
       const auto slash = field.find('/');
       binding.section = slash == field.npos ? "" : lower(trimConfigLine(field.substr(0, slash)));
       binding.key = lower(trimConfigLine(slash == field.npos ? field : field.substr(slash + 1)));
@@ -167,6 +179,33 @@ static KnownMods loadKnownMods() {
     return {};
   std::string text(std::istreambuf_iterator<char>(file), {});
   return parseKnownMods(text);
+}
+
+// Keys that something other than a mod already uses: the known-mods list's
+// [@reserved] section (Steam, Windows), then yours, [ReservedKeys] in
+// ModActivator.User.ini, where you can add the game's own keys:
+//   I = Game: inventory
+struct ReservedKey {
+  std::vector<int> keys;
+  std::string label; // as bindings' labels are: shown through displayText
+};
+static std::vector<ReservedKey> loadReservedKeys() {
+  std::vector<ReservedKey> out;
+  const auto add = [&](const std::string &spelling, const std::string &label) {
+    auto keys = parseShortcut(spelling);
+    if (validShortcut(keys) && !label.empty())
+      out.push_back({std::move(keys), label});
+  };
+  for (const auto &mod : loadKnownMods())
+    for (const auto &[keys, label] : mod.reserved)
+      add(keys, label);
+  std::vector<char> section(32768);
+  GetPrivateProfileSectionA("ReservedKeys", section.data(), (DWORD)section.size(),
+                            userConfigPath().c_str());
+  for (const char *line = section.data(); *line; line += strlen(line) + 1)
+    if (const char *eq = strchr(line, '='); eq && eq != line)
+      add(trimConfigLine(std::string(line, eq)), trimConfigLine(eq + 1));
+  return out;
 }
 
 // The entry for a binding's config file: the same file name, or for an entry
@@ -450,6 +489,7 @@ static void applyKind(Action &action, int kind) {
     return;
   action.menuRank = kind == 1 ? 150 : 0;
   action.featureRank = kind == 2 ? 150 : 0;
+  action.chosenKind = true;
 }
 
 // Before the binding's value is read: the database can say how its numbers
@@ -464,9 +504,12 @@ static void describeBinding(Action &action, DescriptionSources &sources,
     action.modName = mod->name;
     action.modAbout = mod->about;
     action.hexNumbers = mod->hexNumbers;
+    action.reload = mod->reload;
   }
-  if (known)
+  if (known) {
     action.modifierRule = known->modifiers;
+    action.padField = known->padField;
+  }
   if (!action.description.empty())
     action.descriptionSource = sourceComment;
   // Weakest first, so each stronger source replaces what it has.
@@ -487,6 +530,57 @@ static void describeBinding(Action &action, DescriptionSources &sources,
       action.descriptionSource = source;
     }
     applyKind(action, info->kind);
+  }
+}
+
+// The controller combination for a binding, read after its value. Where it
+// is, in order: a setting the known-mods list names; the value's own suffix
+// (F8|LeftStick,RightStick,A); a setting beside it in the same section whose
+// name pairs with the key's (ToggleKey and PadToggle, StanceCycleKey and
+// StanceCycleButtons, HotkeyToggleEffect and ControllerToggleEffect,
+// PrivateHotkey and PrivateControllerButton). section maps the section's
+// lower-case setting names to their values.
+static void findPadBinding(Action &action, const std::map<std::string, std::string> &section) {
+  action.padButtons = 0;
+  if (!action.padField.empty()) {
+    const auto it = section.find(lower(action.padField));
+    if (it != section.end())
+      action.padButtons = padButtonsFrom(it->second);
+    return;
+  }
+  if (const auto bar = action.cachedValue.find('|'); bar != action.cachedValue.npos) {
+    auto suffix = action.cachedValue.substr(bar + 1);
+    suffix = suffix.substr(0, bindingComment(suffix));
+    if ((action.padButtons = padButtonsFrom(trimConfigLine(suffix))) != 0) {
+      action.padField = action.key;
+      return;
+    }
+  }
+  // The action's own word: the key without hotkey/key at either end.
+  auto base = lower(action.key);
+  for (std::string_view suffix : {"hotkeyvk", "hotkeycode", "hotkey", "keycode", "keyvk", "key"})
+    if (base.size() > suffix.size() &&
+        base.compare(base.size() - suffix.size(), suffix.size(), suffix) == 0) {
+      base.resize(base.size() - suffix.size());
+      break;
+    }
+  for (std::string_view prefix : {"hotkey", "key"})
+    if (base.size() > prefix.size() && base.compare(0, prefix.size(), prefix) == 0) {
+      base.erase(0, prefix.size());
+      break;
+    }
+  if (base.empty() || base == "hotkey" || base == "key")
+    return;
+  for (const auto &name : {base + "controllerbuttons", base + "controllerbutton", base + "buttons",
+                           base + "button", base + "controller", base + "gamepad", base + "pad",
+                           "pad" + base, "controller" + base, "gamepad" + base}) {
+    const auto it = section.find(name);
+    if (it == section.end())
+      continue;
+    if ((action.padButtons = padButtonsFrom(it->second)) != 0) {
+      action.padField = name;
+      return;
+    }
   }
 }
 

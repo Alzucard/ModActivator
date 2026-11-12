@@ -255,6 +255,7 @@ static void classifyBinding(Action &action, const BindingComments &comments) {
   if (action.typeOverride >= 1 && action.typeOverride <= 3) {
     action.menuRank = action.typeOverride == 1 ? 200 : 0;
     action.featureRank = action.typeOverride == 2 ? 200 : 0;
+    action.chosenKind = true;
     return;
   }
   action.typeOverride = 0;
@@ -376,6 +377,12 @@ static std::vector<Action> scanBindings(const std::vector<std::string> &mods,
                                              it->path().string().c_str());
       if (size == sizeof values - 2)
         continue;
+      // The section's settings by lower-case name, for finding the
+      // controller setting that goes with a key.
+      std::map<std::string, std::string> settings;
+      for (const char *line = values; *line; line += strlen(line) + 1)
+        if (const char *eq = strchr(line, '='); eq && eq != line)
+          settings.emplace(lower(trimConfigLine(std::string(line, eq))), trimConfigLine(eq + 1));
       for (const char *line = values; *line; line += strlen(line) + 1) {
         std::string entry = line;
         auto sep = entry.find('=');
@@ -407,6 +414,7 @@ static std::vector<Action> scanBindings(const std::vector<std::string> &mods,
         a.cachedValue = read(a);
         a.cachedKeys = keysFrom(a, a.cachedValue, layout);
         if (validShortcut(a.cachedKeys)) {
+          findPadBinding(a, settings);
           found.push_back(std::move(a));
         } else {
           // Say once per value why a binding is missing, unless it is
@@ -455,6 +463,83 @@ static std::vector<Action> selectActions(const std::vector<Action> &bindings,
                 found.end());
   return found;
 }
+// The cards: for each mod its best-guessed menu, and its best-guessed toggle
+// when it has no menu (or you chose that toggle). Then every binding whose kind
+// was chosen rather than guessed (by you in Settings, by the mod itself or by
+// the known-mods list) as a menu or a toggle gets a card of its own, so a mod
+// can have as many cards as it has such shortcuts.
+static std::vector<Action> chooseCards(const std::vector<Action> &all) {
+  auto found = selectActions(all);
+  for (auto &a : selectActions(all, true))
+    if (a.typeOverride == 2 || std::none_of(found.begin(), found.end(), [&](const Action &b) {
+          return lower(a.module) == lower(b.module);
+        }))
+      found.push_back(a);
+  for (const auto &a : all)
+    if (a.chosenKind && (a.menuRank || a.featureRank) &&
+        std::none_of(found.begin(), found.end(),
+                     [&](const Action &b) { return identity(a) == identity(b); }))
+      found.push_back(a);
+  return found;
+}
+// Keys taken outside the mods, from the last refresh. Guarded by catalogMutex.
+static std::vector<ReservedKey> reservedKeys;
+
+// A binding against a reserved combination: the same keys (2), or the
+// reserved one plus more modifiers (1: Ctrl+F12 still sets off Steam's F12).
+// Missing one of its modifiers is no clash: F4 is not Alt+F4.
+static int reservedConflict(const std::vector<int> &keys, const std::vector<int> &reserved) {
+  const int c = conflict(keys, reserved);
+  if (c != 1)
+    return c;
+  for (int k : reserved)
+    if (std::find(keys.begin(), keys.end(), k) == keys.end())
+      return 0;
+  return 1;
+}
+
+// Severity (2 the same, 1 overlapping) and who else uses each binding's keys
+// or controller buttons: ModActivator's own shortcuts, every other binding,
+// and keys reserved by Steam, Windows or you. Controller clashes are marked
+// as such, since the keys themselves may be clear.
+static void markConflicts(std::vector<Action> &all, const std::vector<ReservedKey> &reserved) {
+  const auto ownKeys = openerKeys();
+  const unsigned ownPad = padOpener.load();
+  std::map<int, std::vector<size_t>> bindingsByKey;
+  for (size_t i = 0; i < all.size(); ++i)
+    bindingsByKey[all[i].cachedKeys.back()].push_back(i);
+  for (size_t i = 0; i < all.size(); ++i) {
+    auto &a = all[i];
+    a.severity = 0;
+    a.overlapNames.clear();
+    const auto note = [&](int severity, const std::string &who) {
+      if (!severity)
+        return;
+      a.severity = (std::max)(a.severity, severity);
+      a.overlapNames += who + "\n";
+    };
+    note(conflict(a.cachedKeys, ownKeys), "ModActivator");
+    note(padConflict(a.padButtons, ownPad), "ModActivator (controller)");
+    for (size_t j : bindingsByKey.at(a.cachedKeys.back()))
+      if (i != j)
+        note(conflict(a.cachedKeys, all[j].cachedKeys), all[j].label);
+    for (size_t j = 0; j < all.size(); ++j)
+      if (i != j)
+        note(padConflict(a.padButtons, all[j].padButtons), all[j].label + " (controller)");
+    for (const auto &r : reserved)
+      note(reservedConflict(a.cachedKeys, r.keys), r.label);
+  }
+}
+// Who outside the mods uses keys you are about to save, for the editors.
+static std::vector<std::pair<int, std::string>> reservedClashes(const std::vector<int> &keys) {
+  std::vector<std::pair<int, std::string>> out;
+  std::lock_guard<std::mutex> lock(catalogMutex);
+  for (const auto &r : reservedKeys)
+    if (const int c = reservedConflict(keys, r.keys))
+      out.emplace_back(c, r.label);
+  return out;
+}
+
 static void refresh() {
   std::vector<std::string> mods;
   std::string reshade;
@@ -481,34 +566,13 @@ static void refresh() {
   }
   try {
     auto all = scanBindings(mods, reshade);
-    auto found = selectActions(all);
-    auto toggles = selectActions(all, true);
-    for (auto &a : toggles)
-      if (a.typeOverride == 2 || std::none_of(found.begin(), found.end(), [&](const Action &b) {
-            return lower(a.module) == lower(b.module);
-          }))
-        found.push_back(a);
-    const auto ownKeys = openerKeys();
-    std::map<int, std::vector<size_t>> bindingsByKey;
-    for (size_t i = 0; i < all.size(); ++i)
-      bindingsByKey[all[i].cachedKeys.back()].push_back(i);
-    for (size_t i = 0; i < all.size(); ++i) {
-      auto &a = all[i];
-      a.severity = conflict(a.cachedKeys, ownKeys);
-      if (a.severity)
-        a.overlapNames = "ModActivator\n";
-      for (size_t j : bindingsByKey.at(a.cachedKeys.back()))
-        if (i != j) {
-          int c = conflict(a.cachedKeys, all[j].cachedKeys);
-          if (c) {
-            a.severity = (std::max)(a.severity, c);
-            a.overlapNames += all[j].label + "\n";
-          }
-        }
-    }
+    auto found = chooseCards(all);
+    auto reserved = loadReservedKeys();
+    markConflicts(all, reserved);
     std::lock_guard<std::mutex> lock(catalogMutex);
     catalog = std::move(found);
     allBindings = std::move(all);
+    reservedKeys = std::move(reserved);
     catalogChanged();
   } catch (const std::exception &e) {
     LOG_ERR("Discovery failed: %s", e.what());
