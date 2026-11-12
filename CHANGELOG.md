@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.3.3
 - Show the menu with DLSS frame generation on without editing anything: `WrapSwapChain` now defaults to `auto`, which draws the menu before frame generation whenever the game loads NVIDIA's Streamline. `1` and `0` still force it on or off. An update from 1.3 does not carry over its shipped `WrapSwapChain=0`. Values are read as before (`1 ; note` is still 1), and `true`/`false`, `on`/`off` work too. Not possible alongside Crimson Route. Should the wrapper turn down the game's swapchain, ModActivator falls back to drawing on the finished frames rather than not at all.
 
 ## 1.3.2
