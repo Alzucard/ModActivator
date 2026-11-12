@@ -10,7 +10,7 @@
 #include <Xinput.h>
 
 static constexpr unsigned padLeftTrigger = 1u << 16, padRightTrigger = 1u << 17;
-static constexpr unsigned padTriggerThreshold = 64; // of 255, as XInput's own
+static constexpr unsigned padTriggerThreshold = 64; // of 255: a quarter pull, firmer than XInput's 30
 
 struct PadName {
   const char *name;

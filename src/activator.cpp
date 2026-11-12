@@ -768,7 +768,9 @@ static void readController(bool menuOpen) {
   else if (held & ~alone)
     alone = 0; // another button joined in: a combination, not a tab step
   if (alone && !held) {
-    if (menuOpen)
+    // Not while Settings records a controller shortcut: LB or RB there is
+    // part of the combination, not a step to another tab.
+    if (menuOpen && !padShortcutRecording)
       padTabStep = alone == lb ? -1 : 1;
     alone = 0;
   }
@@ -918,7 +920,9 @@ void FeedInput() {
   }
   if (c)
     input::FeedInput(io);
-  feedController(io, c && framePadConnected);
+  // Not while Settings records a controller shortcut, or the buttons of the
+  // combination would also press, back out of and move through the panel.
+  feedController(io, c && framePadConnected && !padShortcutRecording);
 }
 // The menu's copy of the cards, taken when the catalog or the card order
 // changes rather than every frame, with what each card needs worked out once:
@@ -991,6 +995,7 @@ void Render() {
       ImVec2((std::min)(540 * u, size.x), (std::min)(440 * u, size.y)),
       ImVec2(io.DisplaySize.x - 16, io.DisplaySize.y - 16));
   bool open = s.menuOpen.load();
+  const bool wasOpen = open;
   if (ImGui::Begin("ModActivator##Main", &open,
                    ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
                        ImGuiWindowFlags_NoScrollbar)) {
@@ -1138,8 +1143,19 @@ void Render() {
       ImGui::EndTabBar();
     }
   }
-  if (!open)
+  // A mod menu opened from a card, or from Send in Hotkeys, closes the panel
+  // through queueAction during the frame, so the menu's window gets the
+  // input. That stands even where nothing here cleared open: Send used to
+  // be undone right here, leaving the panel over the mod's menu.
+  const char *closedBy = !s.menuOpen.load() ? "opening a mod's menu"
+                         : !open            ? "the panel's X button"
+                                            : nullptr;
+  if (closedBy) {
+    if (wasOpen)
+      logToggle(false, closedBy);
+    open = false;
     UI::recording = 0;
+  }
   s.menuOpen = open;
   ImGui::End();
 }

@@ -322,7 +322,7 @@ static void drawHotkeys() {
             overlap ? UI::gold : UI::muted);
   ImGui::Spacing();
   ImGui::TextDisabled(
-      "Expand a mod and select a binding. Changes apply after restarting the game.");
+      "Expand a mod and select a binding. Most mods take a changed shortcut after a restart.");
   if (!message.empty())
     ImGui::TextWrapped("%s", message.c_str());
   float available = ImGui::GetContentRegionAvail().y;

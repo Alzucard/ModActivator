@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+- Fix **Send** on a mod's menu shortcut in the Hotkeys tab leaving the panel open over the mod's menu. It closes now, as the mod menu cards always did.
+- Fix recording a controller shortcut in Settings: starting it with A no longer records just A, and while it records, the buttons no longer also press, back out of or switch tabs in the panel.
+- Fix three log lines about moving 1.3's files that dropped the backslash from `bin64\ModActivator...`.
+- Log closing the panel with its X button or by opening a mod's menu, as the other ways already were.
+
 ## 1.3.4
 - Fix the menu blinking with DLSS frame generation, with or without ReShade: when the GPU had not yet finished the menu's work from a frame or two earlier, the menu was left out of that frame, which with frame generation happened on up to half the frames. It now waits for that work (at most 100 ms) and draws the menu on every frame.
 - `WrapSwapChain` defaults to `auto`, which draws the menu before DLSS frame generation whenever the game loads NVIDIA's Streamline, so nobody needs to edit it for frame generation. `1` and `0` still force it on or off, and `1` now also wins when another mod (such as AmbientMixer) hooked Present first. Crimson Route, which breaks with the wrapper, still prevents it. Should the wrapper turn down the game's swapchain, ModActivator falls back to drawing on the finished frames rather than not at all.

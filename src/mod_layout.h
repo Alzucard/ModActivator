@@ -87,7 +87,7 @@ static std::vector<std::string> relocateFiles() {
     done.push_back("Moved ModActivator.User.ini from the ModActivator folder back to bin64.");
   else if (fileExists(oldUser) &&
            MoveFileExA(oldUser.c_str(), (oldUser + ".moved").c_str(), MOVEFILE_REPLACE_EXISTING))
-    done.push_back("Kept bin64\ModActivator.User.ini and renamed the one in the ModActivator "
+    done.push_back("Kept bin64\\ModActivator.User.ini and renamed the one in the ModActivator "
                    "folder ModActivator.User.ini.moved. It can be deleted.");
 
   // The known-mods list is shipped, never edited: a newer copy in bin64 wins.
@@ -118,8 +118,8 @@ static std::vector<std::string> relocateFiles() {
                                  entry.substr(eq + 1).c_str(), ini.c_str());
     }
     if (MoveFileExA(oldIni.c_str(), (oldIni + ".moved").c_str(), MOVEFILE_REPLACE_EXISTING))
-      done.push_back("Carried your [General] options from ModActivator\ModActivator.ini into "
-                     "bin64\ModActivator.ini, and renamed the old one ModActivator.ini.moved. "
+      done.push_back("Carried your [General] options from ModActivator\\ModActivator.ini into "
+                     "bin64\\ModActivator.ini, and renamed the old one ModActivator.ini.moved. "
                      "It can be deleted.");
   }
 
@@ -341,17 +341,25 @@ static bool savePadOpener(unsigned bits) {
 // the panel.
 static bool padShortcutRecording = false;
 // Records a controller combination: every button held at once, taken when
-// they are all let go again. Render thread; the menu is open while it runs.
+// they are all let go again. Only from a controller with nothing held: the
+// A press that started the recording is not the first button of it.
+// Render thread; the menu is open while it runs.
 static unsigned recordPadShortcut(bool &recording) {
   static unsigned most = 0;
+  static bool released = false;
   if (!recording) {
     most = 0;
+    released = false;
     return 0;
   }
   XINPUT_GAMEPAD pad{};
   if (!ml::hooks::ReadPadRaw(&pad))
     return 0;
   const unsigned held = padButtonsHeld(pad);
+  if (!released) {
+    released = !held;
+    return 0;
+  }
   if (held) {
     if (__builtin_popcount(held) >= __builtin_popcount(most))
       most = held;
