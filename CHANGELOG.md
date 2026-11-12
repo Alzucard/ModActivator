@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.3.0
 - Ship a modder kit beside the mod (`ModActivator-<version>-ModderKit.zip`): a guide to how ModActivator reads mods' config files, the `ModActivatorBindingsV1` header, a small example mod that builds, and the known-mods list for reference. The build makes both zips.
 - Give every shortcut that you (with **Show as**), the mod or the known-mods list marks as a menu or a toggle a card of its own, so a mod is no longer limited to one of each. Cards of a mod with several are titled with their action.
 - Add **Send** to every row in the Hotkeys tab, to press any shortcut right away. Menus close the panel; anything else leaves it open.
