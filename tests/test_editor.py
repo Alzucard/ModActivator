@@ -2,8 +2,9 @@ import pathlib,ctypes,shutil
 p=pathlib.Path('build/editor-tests').resolve();shutil.rmtree(p,ignore_errors=True);p.mkdir(parents=True)
 m=ctypes.WinDLL(str(pathlib.Path('build/ModActivator-tests.asi').resolve()));assert m.ModActivatorConflictTest()==0
 fn=m.ModActivatorEditorTest;fn.argtypes=[ctypes.c_char_p]*7+[ctypes.c_int]
+ON_DISK=object() # expected snapshot: the file as written, read by the editor itself
 def edit(name,data,sec,key,new,expected=None):
- path=p/name;path.write_bytes(data);b=ctypes.create_string_buffer(1000);r=fn((str(p)+'\\').encode(),name.encode(),sec.encode(),key.encode(),new.encode(),data if expected is None else expected,b,len(b));return r,b.value.decode(),path.read_bytes()
+ path=p/name;path.write_bytes(data);b=ctypes.create_string_buffer(1000);r=fn((str(p)+'\\').encode(),name.encode(),sec.encode(),key.encode(),new.encode(),None if expected is ON_DISK else data if expected is None else expected,b,len(b));return r,b.value.decode(),path.read_bytes()
 data=b'; My config\r\n[Menu]\r\n  ActivationKeyVK = 0x77 ; Keep this note\r\nRequireCtrl=1\r\nEnabled=1\r\n'
 r,msg,out=edit('Numeric.ini',data,'Menu','ActivationKeyVK','F6');assert r==0,(r,msg);assert out==data.replace(b'0x77',b'0x75');assert (p/'Numeric.ini.modactivator.bak').read_bytes()==data
 r,msg,out=edit('Numeric.ini',data,'Menu','ActivationKeyVK','Ctrl+F6');assert r and out==data
@@ -12,7 +13,11 @@ r,msg,out=edit('Route.ini',route,'SettingsWindow','ManageLocationsHotkey','F4');
 r,msg,out=edit('Stale.ini',route,'SettingsWindow','ManageLocationsHotkey','F4',b'old');assert r and out==route
 r,msg,out=edit('ReShade.ini',b'[INPUT]\nKeyOverlay=36,0,0,0\n','INPUT','KeyOverlay','F4');assert r
 r,msg,out=edit('Duplicate.ini',b'[Menu]\nHotkey=F4\nHotkey=F5\n','Menu','Hotkey','F6');assert r
-r,msg,out=edit('Unicode.ini','[Menu]\nHotkey=F4\n'.encode('utf-16'),'Menu','Hotkey','F6');assert r
+# UTF-16 bytes cannot pass through c_char_p, so the editor is told to use the
+# file as it is (None) and must refuse it as a format it cannot edit.
+unicode=b'[Menu]\nHotkey=F4\n'.decode().encode('utf-16')
+r,msg,out=edit('Unicode.ini',unicode,'Menu','Hotkey','F6',ON_DISK)
+assert r and 'unsupported' in msg and out==unicode,(r,msg)
 print('PASS: exact/modifier conflicts; numeric/hex encoding; comments and CRLF; modifier retention; controller suffix; original backup; stale-edit refusal; duplicate/UTF16/ReShade protection.')
 
 for new in ['F4+F5','F5+Ctrl','Ctrl+Ctrl+F5','119']:

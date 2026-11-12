@@ -1200,7 +1200,9 @@ ModActivatorEditorTest(const char *root, const char *file, const char *sec,
   try {
     Action a{"test", "Fixture.asi", file, sec, field};
     auto value = encodeBinding(a, input);
-    saveBinding(a, expected, value);
+    // A null expected is the file as it is now. A C string cannot carry
+    // contents with zero bytes in them, such as a UTF-16 config.
+    saveBinding(a, expected ? std::string(expected) : readBytes(folder + file), value);
     folder.clear();
     return 0;
   } catch (const std::exception &e) {
