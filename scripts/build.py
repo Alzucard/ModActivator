@@ -92,9 +92,8 @@ data = out / 'ModActivator'
 data.mkdir()
 shutil.copy2(base / 'ModActivator.ini', data / 'ModActivator.ini')
 shutil.copy2(base / 'data/ModActivator.KnownMods.ini', data / 'ModActivator.KnownMods.ini')
-# For mod authors who want to describe their shortcuts (see the header).
-(data / 'include').mkdir()
-shutil.copy2(base / 'include/ModActivatorBindings.h', data / 'include/ModActivatorBindings.h')
+# The export header is not part of the mod: ModActivator never reads it. Mod
+# authors get it in the modder kit below.
 # Distributable documentation and required third-party notices.
 for name in ['README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'CHANGELOG.md']:
     shutil.copy2(base / name, data / name)
