@@ -7,12 +7,13 @@ import ctypes, pathlib, shutil
 root = pathlib.Path('build/description-tests').resolve()
 shutil.rmtree(root, ignore_errors=True)
 root.mkdir(parents=True)
+(root / 'ModActivator').mkdir()  # ModActivator's own files
 dll = pathlib.Path('build/ModActivator-tests.asi').resolve()
 m = ctypes.WinDLL(str(dll))
 fn = m.ModActivatorDescribeTest
 fn.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int]
 
-(root / 'ModActivator.KnownMods.ini').write_text(
+(root / 'ModActivator/ModActivator.KnownMods.ini').write_text(
     '; fixture database\n'
     '[PrivateStorageAnywhere.ini]\n'
     '@mod = Private Storage Anywhere | Opens storage from anywhere.\n'
@@ -46,14 +47,15 @@ fn.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int]
 # ModActivator.User.ini, which no release ships; the same sections in the
 # shipped ModActivator.ini, which an update replaces, are not read.
 mine = 'commented.ini|menu|hotkey'
-(root / 'ModActivator.User.ini').write_text(
+(root / 'ModActivator/ModActivator.User.ini').write_text(
     '[BindingNames]\n' + mine + '=' + 'Mein Fenster'.encode().hex() + '\n'
     '[BindingNotes]\n' + mine + '=' + 'Meine Notiz\nöffnet es'.encode().hex() + '\n')
-(root / 'ModActivator.ini').write_text(
+(root / 'ModActivator/ModActivator.ini').write_text(
     '[BindingNames]\ncombined.ini|menu|hotkey=' + 'Not read'.encode().hex() + '\n')
 
 modules = ';'.join(['PrivateStorageAnywhere.asi', 'DynamicScalify.asi', 'Combined.asi',
-                    'Commented.asi', 'Preset.asi', 'Nested.asi', 'ReadmeMod.asi', dll.name])
+                    'Commented.asi', 'Preset.asi', 'Nested.asi', 'ReadmeMod.asi', dll.name,
+                    'ModActivator.asi'])
 buf = ctypes.create_string_buffer(100000)
 r = fn((str(root) + '\\').encode(), modules.encode(), buf, len(buf))
 assert r >= 0, f'describe test failed with {r}'
@@ -64,6 +66,10 @@ for line in buf.value.decode('utf-8').splitlines():
                                     menu=int(f[7]), feature=int(f[8]), description=f[9])
 print('\n'.join(f'{k}: {v}' for k, v in rows.items()))
 README, COMMENT, KNOWN, MOD, USER = 1, 2, 3, 4, 5
+
+# ModActivator's own folder is full of Key = value lines; none is a binding.
+assert not [k for k in rows if k[0].lower().startswith('modactivator/')], rows.keys()
+print("PASS: ModActivator's own files in its folder are not read as mod bindings.")
 
 row = rows['PrivateStorageAnywhere.ini', 'Hotkeys', 'PrivateHotkey']
 assert row['keys'] == '115,' and row['name'] == 'Private Storage' and row['source'] == KNOWN, row

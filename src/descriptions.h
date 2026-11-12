@@ -5,7 +5,7 @@
 //   1. your own name and note, saved in ModActivator.User.ini
 //   2. the mod itself, through the optional ModActivatorBindingsV1 export
 //      (see include/ModActivatorBindings.h)
-//   3. ModActivator.KnownMods.ini, shipped beside the plugin
+//   3. ModActivator.KnownMods.ini, shipped in the ModActivator folder
 //   4. the comment beside the setting in the mod's config file
 //   5. a readme next to the mod's config file
 //
@@ -81,7 +81,7 @@ static bool saveUserText(const char *section, const Action &action, const std::s
     return false;
   return WritePrivateProfileStringA(section, identity(action).c_str(),
                                     text.empty() ? nullptr : value.c_str(),
-                                    userConfigPath().c_str()) != FALSE;
+                                    writableUserConfig().c_str()) != FALSE;
 }
 static BindingInfo userInfo(const Action &action) {
   return {0, readUserText("BindingNames", action), readUserText("BindingNotes", action)};
@@ -158,7 +158,7 @@ static KnownMods parseKnownMods(const std::string &text) {
 }
 
 static KnownMods loadKnownMods() {
-  std::ifstream file(folder + "ModActivator.KnownMods.ini", std::ios::binary);
+  std::ifstream file(dataPath("ModActivator.KnownMods.ini"), std::ios::binary);
   if (!file)
     return {};
   std::string text(std::istreambuf_iterator<char>(file), {});

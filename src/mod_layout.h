@@ -34,15 +34,19 @@ static std::vector<char> readProfileSection(const char *name, const std::string 
   }
 }
 
+static bool fileExists(const std::string &path) {
+  return GetFileAttributesA(path.c_str()) != INVALID_FILE_ATTRIBUTES;
+}
+
 // Versions before ModActivator.User.ini kept the menu's choices in
-// ModActivator.ini, which an update replaces. Copies them over once, at the
-// first start without a user file, and only when there is something to copy.
-// ModActivator.ini is left as it is.
-static void migrateUserConfig() {
+// ModActivator.ini (old), which an update replaces. Copies them over once,
+// when there is no user file yet, and only when there is something to copy.
+// Returns whether it did. old is left as it is.
+static bool migrateUserConfig(const std::string &old) {
   const auto user = userConfigPath();
-  if (GetFileAttributesA(user.c_str()) != INVALID_FILE_ATTRIBUTES)
-    return;
-  const auto old = folder + "ModActivator.ini";
+  if (fileExists(user) || !fileExists(old))
+    return false;
+  ensureDataFolder();
   bool copied = false;
   for (const char *name : {"BindingTypes", "ModLayout"}) {
     const auto section = readProfileSection(name, old);
@@ -56,9 +60,56 @@ static void migrateUserConfig() {
   if (!_strnicmp(opener, "0x", 2) &&
       WritePrivateProfileStringA("General", "OpenShortcut", opener, user.c_str()))
     copied = true;
-  if (copied)
-    LOG("Moved your menu settings from ModActivator.ini to ModActivator.User.ini, "
-        "where updates no longer replace them.");
+  return copied;
+}
+
+// Versions before the ModActivator folder kept every file beside the plugin
+// in bin64. Moves them into the folder at the first start of this version.
+// Runs before the log is opened, since the log is one of the files, so it
+// returns what it did for the log instead of writing it.
+static std::vector<std::string> moveIntoDataFolder() {
+  std::vector<std::string> done;
+  const auto moveFile = [&](const char *name) {
+    const auto from = folder + name, to = dataPath(name);
+    if (!fileExists(from) || fileExists(to))
+      return;
+    ensureDataFolder();
+    if (MoveFileExA(from.c_str(), to.c_str(), MOVEFILE_COPY_ALLOWED))
+      done.push_back(std::string("Moved ") + name + " into the " + dataFolderName + " folder.");
+  };
+  for (const char *name : {"ModActivator.User.ini", "ModActivator.KnownMods.ini",
+                           "ModActivator.log.old", "ModActivator.log"})
+    moveFile(name);
+
+  const auto oldIni = folder + "ModActivator.ini", newIni = dataPath("ModActivator.ini");
+  if (!fileExists(oldIni))
+    return done;
+  // The menu's choices from before ModActivator.User.ini, wherever the
+  // settings file ends up.
+  if (migrateUserConfig(oldIni))
+    done.push_back("Moved your menu settings from ModActivator.ini to ModActivator.User.ini, "
+                   "where updates no longer replace them.");
+  if (!fileExists(newIni)) {
+    // Only the old file: it is yours, so it moves as it is.
+    moveFile("ModActivator.ini");
+    return done;
+  }
+  // The update brought a fresh ModActivator.ini into the folder. The options
+  // you set in the old one carry over into it, and the old one is renamed so
+  // this happens only once and later edits to the new one stand.
+  const auto general = readProfileSection("General", oldIni);
+  for (const char *line = general.data(); *line; line += strlen(line) + 1) {
+    const std::string entry = line;
+    const auto eq = entry.find('=');
+    if (eq != entry.npos && eq)
+      WritePrivateProfileStringA("General", entry.substr(0, eq).c_str(),
+                                 entry.substr(eq + 1).c_str(), newIni.c_str());
+  }
+  if (MoveFileExA(oldIni.c_str(), (oldIni + ".moved").c_str(), MOVEFILE_REPLACE_EXISTING))
+    done.push_back("Carried your [General] options from the old ModActivator.ini into " +
+                   std::string(dataFolderName) + "\\ModActivator.ini, and renamed the old one "
+                   "ModActivator.ini.moved. It can be deleted.");
+  return done;
 }
 
 static void loadLayout() {
@@ -69,7 +120,7 @@ static void loadLayout() {
   GetPrivateProfileStringA("General", "OpenShortcut", "", value, sizeof value, path.c_str());
   if (!value[0])
     GetPrivateProfileStringA("General", "OpenShortcut", "", value, sizeof value,
-                             (folder + "ModActivator.ini").c_str());
+                             dataPath("ModActivator.ini").c_str());
   const auto code = shortcutCode(parseShortcut(value));
   opener.store(code && (code & 0xff) != VK_ESCAPE ? code : defaultOpener);
   const auto section = readProfileSection("ModLayout", path);
@@ -109,7 +160,7 @@ static bool saveLayout(ModLayout next) {
                ":" + hexText(place.binding) + '\0';
   if (section.empty())
     section += '\0';
-  if (!WritePrivateProfileSectionA("ModLayout", section.c_str(), userConfigPath().c_str()))
+  if (!WritePrivateProfileSectionA("ModLayout", section.c_str(), writableUserConfig().c_str()))
     return false;
   modLayout = std::move(next);
   ++layoutVersion;
@@ -239,7 +290,7 @@ static bool saveOpener(const std::vector<int> &keys) {
     value += hex;
   }
   if (!WritePrivateProfileStringA("General", "OpenShortcut", value.c_str(),
-                                  userConfigPath().c_str()))
+                                  writableUserConfig().c_str()))
     return false;
   opener.store(code);
   refreshRequested.store(true);

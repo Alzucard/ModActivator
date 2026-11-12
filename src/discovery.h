@@ -102,7 +102,12 @@ static const std::string &cachedIdentity(const Action &a) {
 // file, so installing an update, which brings a fresh ModActivator.ini, never
 // replaces it. Created on the first save (or by migrateUserConfig, from what
 // older versions kept in ModActivator.ini).
-static std::string userConfigPath() { return folder + "ModActivator.User.ini"; }
+static std::string userConfigPath() { return dataPath("ModActivator.User.ini"); }
+// For saving: the folder is created first if it is not there yet.
+static std::string writableUserConfig() {
+  ensureDataFolder();
+  return userConfigPath();
+}
 
 // Overrides belong to ModActivator, keyed by the config path, section and field.
 static int readBindingType(const Action &action) {
@@ -114,7 +119,7 @@ static bool saveBindingType(const Action &action, int type) {
   const auto value = std::to_string(type);
   return WritePrivateProfileStringA("BindingTypes", identity(action).c_str(),
                                     type ? value.c_str() : nullptr,
-                                    userConfigPath().c_str()) != FALSE;
+                                    writableUserConfig().c_str()) != FALSE;
 }
 
 static std::string trimConfigLine(const std::string &line) {

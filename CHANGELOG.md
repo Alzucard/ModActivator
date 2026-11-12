@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Keep every ModActivator file except the plugin in a `ModActivator` folder inside `bin64`: the settings, your menu choices, the known-mods list, the log and the documentation. `ModActivator.asi` stays in `bin64`, where the ASI loader looks. The first start moves an older version's files into the folder, carries your `[General]` options into the new `ModActivator.ini`, and renames the old one `ModActivator.ini.moved`.
 - Save everything set in the menu (panel shortcut, binding types, tabs, card order, names and notes) in `ModActivator.User.ini` instead of `ModActivator.ini`. No release ships that file, so an update, which replaces `ModActivator.ini`, no longer resets them. The first start copies an older `ModActivator.ini`'s choices over once.
 - Name and describe any shortcut yourself in the Hotkeys tab. Your words win over every other source.
 - Ship `ModActivator.KnownMods.ini`, which says what the shortcuts of about 60 popular mods do, from their Nexus Mods pages and config files. It also makes settings such as Dynamic Scalify's `OpenMenu` discoverable.

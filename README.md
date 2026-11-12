@@ -17,15 +17,28 @@ The panel uses a charcoal-and-gold theme with larger text, searchable mod cards,
 
 ## Install
 
-Close Crimson Desert. Copy `ModActivator.asi`, `ModActivator.ini` and `ModActivator.KnownMods.ini` into the game's `bin64` folder, beside `CrimsonDesert.exe`. An ASI loader is required.
+Close Crimson Desert. Copy `ModActivator.asi` and the `ModActivator` folder into the game's `bin64` folder, beside `CrimsonDesert.exe`. An ASI loader is required.
+
+```
+bin64\
+  ModActivator.asi                 the plugin; the ASI loader only looks here
+  ModActivator\
+    ModActivator.ini               options
+    ModActivator.KnownMods.ini     what popular mods' shortcuts do
+    ModActivator.User.ini          your menu choices, created when you first save one
+    ModActivator.log               this session's log (and .log.old, the last one)
+    README.md, LICENSE, ...        documentation and licences
+```
+
+Updating from a version that kept its files directly in `bin64`: install as above. The first start moves the old files into the folder, carries your `[General]` options into the new `ModActivator.ini`, and renames the old one `ModActivator.ini.moved`, which can then be deleted. The log says what was moved.
 
 Launch the game and press **Ctrl+Shift+Backspace**.
 
-Everything you set in the menu (the panel shortcut, binding types, tabs, card order, and your names and notes) is saved in `ModActivator.User.ini`, which ModActivator creates beside itself. No release includes that file, so updating, by hand or with a mod manager, never replaces it, and the new `ModActivator.ini` can simply overwrite the old one. Versions before this kept those choices in `ModActivator.ini`. The first start of this version copies them over once and says so in the log.
+Everything you set in the menu (the panel shortcut, binding types, tabs, card order, and your names and notes) is saved in `ModActivator\ModActivator.User.ini`. No release includes that file, so updating, by hand or with a mod manager, never replaces it, and the new `ModActivator.ini` can simply overwrite the old one. Versions before this kept those choices in `ModActivator.ini`. The first start of this version copies them over once and says so in the log.
 
 With ReShade 6.8.0 or newer, ModActivator draws through ReShade's add-on callbacks, after ReShade's effects and overlay. With an older ReShade it falls back to the legacy DirectX path automatically. Set `UseReShadeEvents=0` under `[General]` to always use the legacy path. On the legacy path, try `WrapSwapChain=1` if the overlay is invisible with frame generation. Set `HookXInput=0` if the controller should keep reaching the game while the menu is open.
 
-`ModActivator.log` is started fresh each launch, and the previous one is kept as `ModActivator.log.old`. Set `DebugInput=1` to add cursor and raw input diagnostics each time the menu opens.
+`ModActivator\ModActivator.log` is started fresh each launch, and the previous one is kept as `ModActivator.log.old`. Set `DebugInput=1` to add cursor and raw input diagnostics each time the menu opens.
 
 ## Binding types
 
@@ -84,7 +97,7 @@ Automated checks cover parsing, discovery, config editing and preservation, back
 
 ## Uninstall
 
-With the game closed, remove `ModActivator.asi`, `ModActivator.ini` and `ModActivator.KnownMods.ini`, and `ModActivator.User.ini` to forget your menu settings too. Restore edited configs from their backups if needed; uninstalling does not undo previous hotkey edits.
+With the game closed, remove `ModActivator.asi` and the `ModActivator` folder from `bin64`. Keep `ModActivator\ModActivator.User.ini` if you might reinstall and want your menu settings back. Restore edited configs from their backups if needed; uninstalling does not undo previous hotkey edits.
 
 ## Credits
 

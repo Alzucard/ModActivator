@@ -77,12 +77,22 @@ def link(path, tests):
 link(out / 'ModActivator.asi', False)
 link(obj / 'ModActivator-tests.asi', True)
 
-shutil.copy2(base / 'ModActivator.ini', out / 'ModActivator.ini')
-shutil.copy2(base / 'data/ModActivator.KnownMods.ini', out / 'ModActivator.KnownMods.ini')
+# dist/ mirrors bin64: the plugin at the top, where the ASI loader looks, and
+# everything else in a ModActivator folder beside it. What earlier builds
+# staged at the top goes, so the folder can be copied into bin64 as it is.
+for name in ['ModActivator.ini', 'ModActivator.KnownMods.ini', 'README.md', 'LICENSE',
+             'THIRD_PARTY_NOTICES.md', 'CHANGELOG.md']:
+    (out / name).unlink(missing_ok=True)
+for name in ['include', 'licenses', 'ModActivator']:
+    shutil.rmtree(out / name, ignore_errors=True)
+data = out / 'ModActivator'
+data.mkdir()
+shutil.copy2(base / 'ModActivator.ini', data / 'ModActivator.ini')
+shutil.copy2(base / 'data/ModActivator.KnownMods.ini', data / 'ModActivator.KnownMods.ini')
 # For mod authors who want to describe their shortcuts (see the header).
-(out / 'include').mkdir(exist_ok=True)
-shutil.copy2(base / 'include/ModActivatorBindings.h', out / 'include/ModActivatorBindings.h')
-# Stage distributable documentation and required third-party notices.
+(data / 'include').mkdir()
+shutil.copy2(base / 'include/ModActivatorBindings.h', data / 'include/ModActivatorBindings.h')
+# Distributable documentation and required third-party notices.
 for name in ['README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'CHANGELOG.md']:
-    shutil.copy2(base / name, out / name)
-shutil.copytree(base / 'licenses', out / 'licenses', dirs_exist_ok=True)
+    shutil.copy2(base / name, data / name)
+shutil.copytree(base / 'licenses', data / 'licenses')

@@ -26,7 +26,19 @@
 #include <vector>
 static bool previewMode = false;
 static int previewTab = 0;
+// The plugin's folder (bin64), where the mods and their configs are.
 static std::string folder;
+// ModActivator's own files (its settings, your choices, the known-mods list
+// and the log) are in a folder of their own inside it, so bin64 holds only
+// ModActivator.asi. The plugin itself must stay in bin64 for the loader.
+static constexpr char dataFolderName[] = "ModActivator";
+static std::string dataPath(const char *name) {
+  return folder + dataFolderName + "\\" + name;
+}
+// Before writing one of those files: the folder may not exist yet.
+static void ensureDataFolder() {
+  CreateDirectoryA((folder + dataFolderName).c_str(), nullptr);
+}
 static std::atomic<unsigned long> configReads{0};
 
 struct Action {
@@ -313,7 +325,10 @@ static void Begin() {
   std::lock_guard<std::mutex> lock(logMutex);
   if (logFile)
     return;
-  const auto path = folder + "ModActivator.log";
+  // Without a usable plugin folder, the working directory instead.
+  if (!folder.empty())
+    ensureDataFolder();
+  const auto path = folder.empty() ? std::string("ModActivator.log") : dataPath("ModActivator.log");
   MoveFileExA(path.c_str(), (path + ".old").c_str(), MOVEFILE_REPLACE_EXISTING);
   logFile = fopen(path.c_str(), "w");
 }
@@ -933,11 +948,15 @@ static DWORD WINAPI start(void *arg) {
             "Move the game to a path with plain characters, or enable 8.3 names on that drive.");
     return 0;
   }
-  ml::Log::Begin(); // before the migration, so its line is on record
+  // Files an older version left in bin64 move into the ModActivator folder
+  // first, the log among them, so the log opens after and records the move.
+  const auto moved = moveIntoDataFolder();
+  ml::Log::Begin();
   LOG("Mod Activator " MODACTIVATOR_VERSION " started.");
-  migrateUserConfig();
+  for (const auto &line : moved)
+    LOG("%s", line.c_str());
   loadLayout();
-  const auto config = folder + "ModActivator.ini";
+  const auto config = dataPath("ModActivator.ini");
   ml::Settings::Get().wrapSwapChain =
       GetPrivateProfileIntA("General", "WrapSwapChain", 0, config.c_str()) != 0;
   ml::Settings::Get().enableDred =
@@ -1154,13 +1173,15 @@ ModActivatorSettingsTest(const char *root) {
   refreshRequested.store(false);
   return result;
 }
-// The move of the menu's choices out of ModActivator.ini. root is an empty
-// folder; each case writes its own ModActivator.ini.
+// The move of the menu's choices out of ModActivator.ini, and of every file
+// out of bin64 into the ModActivator folder. root is an empty folder; each
+// case writes its own ModActivator.ini.
 extern "C" __declspec(dllexport) int ModActivatorMigrationTest(const char *root) {
   if (!folder.empty() || !root)
     return -1;
   folder = root;
-  const auto old = folder + "ModActivator.ini", user = userConfigPath();
+  ensureDataFolder();
+  const auto old = dataPath("ModActivator.ini"), user = userConfigPath();
   const auto exists = [](const std::string &p) {
     return GetFileAttributesA(p.c_str()) != INVALID_FILE_ATTRIBUTES;
   };
@@ -1170,7 +1191,7 @@ extern "C" __declspec(dllexport) int ModActivatorMigrationTest(const char *root)
     // is yours, so no user file appears.
     DeleteFileA(user.c_str());
     std::ofstream(old) << "[General]\nOpenShortcut=Ctrl+Shift+Backspace\n";
-    migrateUserConfig();
+    migrateUserConfig(old);
     if (exists(user))
       return 1;
     loadLayout();
@@ -1181,7 +1202,7 @@ extern "C" __declspec(dllexport) int ModActivatorMigrationTest(const char *root)
     std::ofstream(old) << "[General]\nOpenShortcut=0x11+0x70\nWrapSwapChain=0\n"
                           "[BindingTypes]\nmod.ini|menu|hotkey=2\n"
                           "[ModLayout]\nT3=" + hexText("Mine") + "\nM0=3:" + hexText(identity(probe)) + "\n";
-    migrateUserConfig();
+    migrateUserConfig(old);
     if (!exists(user))
       return 3;
     loadLayout();
@@ -1192,7 +1213,7 @@ extern "C" __declspec(dllexport) int ModActivatorMigrationTest(const char *root)
     // nothing, and the next start does not copy again.
     std::ofstream(old) << "[General]\nOpenShortcut=Ctrl+Shift+Backspace\n"
                           "[BindingTypes]\nmod.ini|menu|hotkey=1\n";
-    migrateUserConfig();
+    migrateUserConfig(old);
     loadLayout();
     if (openerKeys() != std::vector<int>{VK_CONTROL, VK_F1} || readBindingType(probe) != 2 ||
         modLayout.tabs[3] != "Mine")
@@ -1206,6 +1227,37 @@ extern "C" __declspec(dllexport) int ModActivatorMigrationTest(const char *root)
         GetPrivateProfileIntA("BindingTypes", identity(probe).c_str(), 0, old.c_str()) != 1 ||
         readBindingType(probe) != 3)
       return 7;
+
+    // A version from before the folder: everything sits in bin64, its
+    // settings file holds your options and your old menu choices.
+    for (const char *name : {"ModActivator.ini", "ModActivator.User.ini", "ModActivator.log"})
+      DeleteFileA(dataPath(name).c_str());
+    const auto rootIni = folder + "ModActivator.ini";
+    std::ofstream(rootIni) << "[General]\nHookXInput=0\n[BindingTypes]\nmod.ini|menu|hotkey=2\n";
+    std::ofstream(folder + "ModActivator.log") << "old log\n";
+    auto moved = moveIntoDataFolder();
+    if (exists(rootIni) || exists(folder + "ModActivator.log") || !exists(dataPath("ModActivator.log")) ||
+        GetPrivateProfileIntA("General", "HookXInput", 1, old.c_str()) != 0 ||
+        readBindingType(probe) != 2 || moved.size() != 3)
+      return 8;
+    // The update shipped a fresh ModActivator.ini into the folder while the
+    // old one is still in bin64: your options carry over into the new one,
+    // its comments stay, and the old one is renamed so this happens once.
+    std::ofstream(old) << "[General]\n; shipped comment\nHookXInput=1\nUseReShadeEvents=1\n";
+    std::ofstream(rootIni) << "[General]\nHookXInput=0\n";
+    moveIntoDataFolder();
+    std::ifstream fresh(old);
+    const std::string text(std::istreambuf_iterator<char>(fresh), {});
+    fresh.close();
+    if (exists(rootIni) || !exists(rootIni + ".moved") ||
+        GetPrivateProfileIntA("General", "HookXInput", 1, old.c_str()) != 0 ||
+        GetPrivateProfileIntA("General", "UseReShadeEvents", 0, old.c_str()) != 1 ||
+        text.find("; shipped comment") == text.npos)
+      return 9;
+    WritePrivateProfileStringA("General", "HookXInput", "1", old.c_str());
+    if (!moveIntoDataFolder().empty() ||
+        GetPrivateProfileIntA("General", "HookXInput", 0, old.c_str()) != 1)
+      return 10;
     return 0;
   }();
   folder.clear();

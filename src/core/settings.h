@@ -2,7 +2,7 @@
 
 namespace ml
 {
-    // [General] options from ModActivator.ini, read once at startup.
+    // [General] options from ModActivator\ModActivator.ini, read once at startup.
     struct Config
     {
         bool wrapSwapChain = false; // WrapSwapChain
