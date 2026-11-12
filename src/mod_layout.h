@@ -107,13 +107,15 @@ static std::vector<std::string> relocateFiles() {
     for (const char *line = general.data(); *line; line += strlen(line) + 1) {
       const std::string entry = line;
       const auto eq = entry.find('=');
+      if (eq == entry.npos || !eq)
+        continue;
       // 1.3 shipped WrapSwapChain=0, which was no choice of yours: auto,
       // the new default, stays.
-      if (!_stricmp(entry.c_str(), "WrapSwapChain=0"))
+      if (!_stricmp(trimConfigLine(entry.substr(0, eq)).c_str(), "WrapSwapChain") &&
+          wrapValue(entry.c_str() + eq + 1) == 0)
         continue;
-      if (eq != entry.npos && eq)
-        WritePrivateProfileStringA("General", entry.substr(0, eq).c_str(),
-                                   entry.substr(eq + 1).c_str(), ini.c_str());
+      WritePrivateProfileStringA("General", entry.substr(0, eq).c_str(),
+                                 entry.substr(eq + 1).c_str(), ini.c_str());
     }
     if (MoveFileExA(oldIni.c_str(), (oldIni + ".moved").c_str(), MOVEFILE_REPLACE_EXISTING))
       done.push_back("Carried your [General] options from ModActivator\ModActivator.ini into "

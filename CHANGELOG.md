@@ -1,7 +1,7 @@
 # Changelog
 
 ## Unreleased
-- Show the menu with DLSS frame generation on without editing anything: `WrapSwapChain` now defaults to `auto`, which draws the menu before frame generation whenever the game loads NVIDIA's Streamline. `1` and `0` still force it on or off. An update from 1.3 does not carry over its shipped `WrapSwapChain=0`.
+- Show the menu with DLSS frame generation on without editing anything: `WrapSwapChain` now defaults to `auto`, which draws the menu before frame generation whenever the game loads NVIDIA's Streamline. `1` and `0` still force it on or off. An update from 1.3 does not carry over its shipped `WrapSwapChain=0`. Values are read as before (`1 ; note` is still 1), and `true`/`false`, `on`/`off` work too. Not possible alongside Crimson Route. Should the wrapper turn down the game's swapchain, ModActivator falls back to drawing on the finished frames rather than not at all.
 
 ## 1.3.2
 - Keep the INI files (`ModActivator.ini`, `ModActivator.KnownMods.ini`, `ModActivator.User.ini`) in `bin64` again, beside the plugin: DMM installs a release's files there but not its subfolders, so DMM installs had no settings file and no known-mods list. Only the log, the documentation and the licences stay in the `ModActivator` folder, which ModActivator creates for the log when it is missing.

@@ -1553,16 +1553,18 @@ namespace ml::hooks
     // drawing before Streamline interpolates, is the only way it shows.
     // Without Streamline the present hook is the path with the longer record,
     // so it stays. The game loads sl.interposer.dll before its first
-    // swapchain, which is where this is asked. Said once in the log.
+    // swapchain, which is where this is first asked. The answer is kept for
+    // the session, so the detours InstallPass chose from it and every later
+    // recreation agree, and it is said once in the log.
     static bool WrapWanted()
     {
-        const int setting = Settings::Get().wrapSwapChain;
-        const bool streamline = GetModuleHandleA("sl.interposer.dll") != nullptr;
-        const bool wrap = setting >= 0 ? setting != 0 : streamline;
-        static bool s_said = false;
-        if (!s_said)
+        static int s_decided = -1;
+        if (s_decided < 0)
         {
-            s_said = true;
+            const int setting = Settings::Get().wrapSwapChain;
+            const bool streamline = GetModuleHandleA("sl.interposer.dll") != nullptr;
+            const bool wrap = setting >= 0 ? setting != 0 : streamline;
+            s_decided = wrap;
             if (setting < 0)
                 LOG("WrapSwapChain=auto: Streamline (DLSS frame generation) is %s, so the swapchain is %s.",
                     streamline ? "loaded" : "not loaded",
@@ -1572,7 +1574,7 @@ namespace ml::hooks
                 LOG("WrapSwapChain=%d: the swapchain is %s.", setting,
                     wrap ? "wrapped" : "left alone. The overlay draws through the present hook, which does not show under DLSS frame generation");
         }
-        return wrap;
+        return s_decided != 0;
     }
 
     // Detours on Present that the wrapper has always lived alongside. Steam's
@@ -2168,7 +2170,14 @@ namespace ml::hooks
             pq->Release();
         }
         if (!s_stack && WrapWanted())
+        {
             WrapSwapChain(ppSwapChain, hwnd);
+            // InstallPass left the present calls other mods own alone because
+            // the wrapper was to draw. When it declined the game's chain
+            // instead, nothing would: take the present calls after all.
+            if (!g_wrapperActive && !AnyDrawPathHooked())
+                EscalateToProxy("the swapchain wrapper declined the game's swapchain and no present call is hooked, so nothing can draw the menu");
+        }
         return hr;
     }
 
