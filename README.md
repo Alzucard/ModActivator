@@ -50,7 +50,7 @@ Each binding's name and description come from the most trustworthy source that h
 
 1. **Your own name and note.** Select a binding in **Hotkeys**, fill in **Name** and **Note**, and click **Save name and note**. They take effect at once and are saved in `ModActivator.User.ini`, so updating ModActivator or the mod never replaces them. **Clear mine** goes back to the other sources.
 2. **The mod itself**, for mods that describe their shortcuts to ModActivator (see below).
-3. **`ModActivator.KnownMods.ini`**, a list of what the shortcuts of about 60 popular Crimson Desert mods do, written from their Nexus Mods pages and config files. It also tells ModActivator about settings whose names do not look like shortcuts, and about mods that write key codes in hexadecimal. It is replaced on update; put your own changes in your notes instead.
+3. **`ModActivator.KnownMods.ini`**, a list of what the shortcuts of about 60 popular Crimson Desert mods do, written from their Nexus Mods pages and config files. It also tells ModActivator about settings whose names do not look like shortcuts (and ones that only look like shortcuts), about mods that write key codes in hexadecimal, and about modifiers a mod keeps in a setting of its own, such as Gilded Compass's `HotkeyCtrl=1`, so the full combination is sent. It is replaced on update; put your own changes in your notes instead.
 4. **The comment** beside the setting in the mod's config file.
 5. **A readme** next to the mod's config file: a `.txt` or `.md` file named `readme…` or after the mod.
 

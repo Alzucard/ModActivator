@@ -35,10 +35,12 @@ static const char *sourceLabel(int source) {
 
 // Binding kinds, as the database and the mod export name them. The numbers
 // are the export's (ModActivatorKind*) and match the Settings tab's
-// "Show as" types 1 to 3.
+// "Show as" types 1 to 3. The database's ignore is a setting that only looks
+// like a shortcut, such as a flag called HotkeyCtrl.
+static constexpr int kindIgnore = -1;
 static int kindFromName(const std::string &name) {
   const auto k = lower(name);
-  return k == "menu" ? 1 : k == "toggle" ? 2 : k == "action" ? 3 : 0;
+  return k == "menu" ? 1 : k == "toggle" ? 2 : k == "action" ? 3 : k == "ignore" ? kindIgnore : 0;
 }
 
 static std::string hexText(const std::string &value) {
@@ -91,6 +93,7 @@ static BindingInfo userInfo(const Action &action) {
 struct KnownBinding {
   std::string section, key; // lower case; section empty for any, "x*" for a prefix
   BindingInfo info;
+  std::string modifiers; // Action::modifierRule, as written in the file
 };
 struct KnownMod {
   std::string file; // lower case, '/' separated
@@ -144,8 +147,9 @@ static KnownMods parseKnownMods(const std::string &text) {
     } else if (field == "@numbers") {
       mod.hexNumbers = lower(value) == "hex";
     } else if (field[0] != '@') {
-      const auto parts = splitFields(value, 3);
+      const auto parts = splitFields(value, 4);
       KnownBinding binding;
+      binding.modifiers = parts[3];
       const auto slash = field.find('/');
       binding.section = slash == field.npos ? "" : lower(trimConfigLine(field.substr(0, slash)));
       binding.key = lower(trimConfigLine(slash == field.npos ? field : field.substr(slash + 1)));
@@ -402,7 +406,7 @@ struct DescriptionSources {
 
 // The kind a source gave, unless you chose one in Settings.
 static void applyKind(Action &action, int kind) {
-  if (action.typeOverride || !kind)
+  if (action.typeOverride || kind <= 0)
     return;
   action.menuRank = kind == 1 ? 150 : 0;
   action.featureRank = kind == 2 ? 150 : 0;
@@ -421,6 +425,8 @@ static void describeBinding(Action &action, DescriptionSources &sources,
     action.modAbout = mod->about;
     action.hexNumbers = mod->hexNumbers;
   }
+  if (known)
+    action.modifierRule = known->modifiers;
   if (!action.description.empty())
     action.descriptionSource = sourceComment;
   // Weakest first, so each stronger source replaces what it has.
@@ -448,7 +454,14 @@ static void describeBinding(Action &action, DescriptionSources &sources,
 // read as a shortcut whatever it is called.
 static bool describedField(DescriptionSources &sources, const Action &probe) {
   if (const auto *mod = knownModFor(sources.known, probe))
-    if (knownBindingFor(*mod, probe.section, probe.key))
-      return true;
+    if (const auto *known = knownBindingFor(*mod, probe.section, probe.key))
+      return known->info.kind != kindIgnore;
   return exportFor(sources.exportsFor(probe.module), probe) != nullptr;
+}
+// Whether the database says a field that looks like a shortcut is not one.
+static bool ignoredField(DescriptionSources &sources, const Action &probe) {
+  if (const auto *mod = knownModFor(sources.known, probe))
+    if (const auto *known = knownBindingFor(*mod, probe.section, probe.key))
+      return known->info.kind == kindIgnore;
+  return false;
 }

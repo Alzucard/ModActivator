@@ -28,7 +28,19 @@ fn.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int]
     'UserPreset*/ToggleHotkey = toggle | Preset | Prefix section.\n'
     'Exact/ToggleHotkey = toggle | Exact | Exact section.\n'
     '[Nested/deep.ini]\n'
-    'Hotkey = menu | Deep menu | Matched by its folder.\n', encoding='utf-8')
+    'Hotkey = menu | Deep menu | Matched by its folder.\n'
+    '[Compass.ini]\n'
+    'Menu/HotkeyVk = menu | Compass menu | Ctrl from a flag. | Ctrl?HotkeyCtrl\n'
+    'Menu/MapHotkeyVk = toggle | Minimap | Always with Ctrl. | Ctrl\n'
+    'Menu/HotkeyCtrl = ignore\n'
+    '[Flagless.ini]\n'
+    'Menu/HotkeyVk = menu | Flag off | Ctrl only when the flag is set. | Ctrl?HotkeyCtrl\n'
+    '[Linked.ini]\n'
+    'OpenKey2Vk = menu | Second key | The modifier another setting names. | =OpenKey2WithVk\n',
+    encoding='utf-8')
+(root / 'Compass.ini').write_text('[Menu]\nHotkeyCtrl=1\nHotkeyVk=118\nMapHotkeyVk=119\n')
+(root / 'Flagless.ini').write_text('[Menu]\nHotkeyCtrl=0\nHotkeyVk=118\n')
+(root / 'Linked.ini').write_text('[General]\nOpenKey2WithVk=ALT\nOpenKey2Vk=F7\n')
 (root / 'PrivateStorageAnywhere.ini').write_text('[Hotkeys]\nPrivateHotkey=73\nReloadKey=7A\n')
 (root / 'DynamicScalify.ini').write_text('[General]\nOpenMenu=F6\n')
 (root / 'Combined.ini').write_text('[Menu]\n; Opens the combined menu.\nHotkey=F2\n')
@@ -55,6 +67,7 @@ mine = 'commented.ini|menu|hotkey'
 
 modules = ';'.join(['PrivateStorageAnywhere.asi', 'DynamicScalify.asi', 'Combined.asi',
                     'Commented.asi', 'Preset.asi', 'Nested.asi', 'ReadmeMod.asi', dll.name,
+                    'Compass.asi', 'Flagless.asi', 'Linked.asi',
                     'ModActivator.asi'])
 buf = ctypes.create_string_buffer(100000)
 r = fn((str(root) + '\\').encode(), modules.encode(), buf, len(buf))
@@ -76,6 +89,13 @@ assert row['keys'] == '115,' and row['name'] == 'Private Storage' and row['sourc
 assert row['mod'] == 'Private Storage Anywhere' and row['menu'] == 150, row
 assert rows['PrivateStorageAnywhere.ini', 'Hotkeys', 'ReloadKey']['keys'] == '122,'
 print('PASS: database names, kinds and hex key codes.')
+
+assert rows['Compass.ini', 'Menu', 'HotkeyVk']['keys'] == '17,118,'
+assert rows['Compass.ini', 'Menu', 'MapHotkeyVk']['keys'] == '17,119,'
+assert ('Compass.ini', 'Menu', 'HotkeyCtrl') not in rows  # its 1 is not the 1 key
+assert rows['Flagless.ini', 'Menu', 'HotkeyVk']['keys'] == '118,'
+assert rows['Linked.ini', 'General', 'OpenKey2Vk']['keys'] == '18,118,'
+print('PASS: modifiers kept in separate settings, and a flag that only looks like a key.')
 
 row = rows['DynamicScalify.ini', 'General', 'OpenMenu']
 assert row['keys'] == '117,' and row['name'] == 'Scaling menu', row

@@ -6,6 +6,8 @@
 - Name and describe any shortcut yourself in the Hotkeys tab. Your words win over every other source.
 - Ship `ModActivator.KnownMods.ini`, which says what the shortcuts of about 60 popular mods do, from their Nexus Mods pages and config files. It also makes settings such as Dynamic Scalify's `OpenMenu` discoverable.
 - Read and write Private Storage Anywhere's key codes in hexadecimal, as the mod does. `PrivateHotkey=73` is F4, not I.
+- Send the modifiers a mod keeps in a setting of its own: Gilded Compass's menu is Ctrl+F7 when `HotkeyCtrl=1` and its minimap key always takes Ctrl, and DesertLink's second keys take the modifier named in `OpenKey2WithVk`. Gilded Compass's `HotkeyCtrl` flag is no longer listed as a shortcut for the 1 key.
+- Add EEA HUD Resizer, Gilded Compass and SwiftQuestFollow to the known mods, and Drop Control's keys to its summary.
 - Use a readme next to a mod's config file as a description when nothing better says what a shortcut does.
 - Let mods describe their own shortcuts through an optional `ModActivatorBindingsV1` export (`include/ModActivatorBindings.h`).
 - Show where each description came from, and the mod's summary on hover.

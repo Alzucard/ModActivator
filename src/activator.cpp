@@ -21,6 +21,7 @@
 #include <mutex>
 #include <map>
 #include <set>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -59,6 +60,10 @@ struct Action {
   std::string customName, modName, modAbout;
   // The mod writes bare key codes in hexadecimal (73 is F4).
   bool hexNumbers = false;
+  // Modifiers the mod requires that its value does not say, from the
+  // known-mods list (see ruleModifiers): "Ctrl", "Ctrl?HotkeyCtrl",
+  // "=OpenKey2WithVk". Empty for none.
+  std::string modifierRule;
   // Strings the menu derives from the fields above, filled on first use and
   // reused every frame after. Empty means not computed yet. The fields they
   // come from are not changed once an Action is shown.
@@ -265,6 +270,37 @@ static bool standaloneDigit(const Action &a, const std::string &s) {
   // A standalone zero is commonly used to disable a shortcut.
   return !explicitVk && s.size() == 1 && s[0] >= '1' && s[0] <= '9';
 }
+// The modifiers a.modifierRule adds. Its words, separated by spaces or
+// commas:
+//   Ctrl, Shift, Alt      always that modifier
+//   Ctrl?Field            Ctrl when Field, in the binding's section, is not 0
+//   =Field                the modifier Field names: ALT, Ctrl, 18, 0x12...
+static std::vector<int> ruleModifiers(const Action &a) {
+  std::vector<int> out;
+  const auto config = folder + a.file;
+  const auto add = [&](int k) {
+    if ((k == VK_CONTROL || k == VK_SHIFT || k == VK_MENU) &&
+        std::find(out.begin(), out.end(), k) == out.end())
+      out.push_back(k);
+  };
+  std::string rule = a.modifierRule;
+  std::replace(rule.begin(), rule.end(), ',', ' ');
+  std::istringstream words(rule);
+  for (std::string word; words >> word;) {
+    if (word[0] == '=') {
+      char value[64]{};
+      GetPrivateProfileStringA(a.section.c_str(), word.c_str() + 1, "", value, sizeof value,
+                               config.c_str());
+      add(vk(value));
+    } else if (const auto query = word.find('?'); query != word.npos) {
+      if (GetPrivateProfileIntA(a.section.c_str(), word.c_str() + query + 1, 0, config.c_str()))
+        add(vk(word.substr(0, query)));
+    } else {
+      add(vk(word));
+    }
+  }
+  return out;
+}
 static std::vector<int> keysFrom(const Action &a, std::string s,
                                  HKL layout = gameKeyboardLayout(),
                                  unsigned *mainScan = nullptr) {
@@ -290,6 +326,9 @@ static std::vector<int> keysFrom(const Action &a, std::string s,
     if (GetPrivateProfileIntA(a.section.c_str(), pair.first, 0,
                               (folder + a.file).c_str()))
       out.push_back(pair.second);
+  for (int k : ruleModifiers(a))
+    if (std::find(out.begin(), out.end(), k) == out.end())
+      out.push_back(k);
   if (!_stricmp(a.file.c_str(), "ReShade.ini")) {
     int k = 0, c = 0, sh = 0, al = 0, used = 0;
     if (sscanf(s.c_str(), "%d,%d,%d,%d%n", &k, &c, &sh, &al, &used) != 4 ||
@@ -1353,6 +1392,16 @@ ModActivatorDescribeTest(const char *root, const char *modules, char *out, int c
     if (encodeBinding(hex, "F6") != "75" || encodeBinding(hex, "", {VK_F7}) != "76") {
       folder.clear();
       return -5;
+    }
+    // A modifier the mod keeps in a flag of its own: recording Ctrl+F9 saves
+    // the plain key code and leaves the flag to supply the Ctrl.
+    Action compass{"Compass", "Compass.asi", "Compass.ini", "Menu", "HotkeyVk"};
+    compass.modifierRule = "Ctrl?HotkeyCtrl";
+    std::ofstream(folder + "Compass.ini") << "[Menu]\nHotkeyCtrl=1\nHotkeyVk=118\n";
+    if (keysFrom(compass, "118") != std::vector<int>{VK_CONTROL, VK_F7} ||
+        encodeBinding(compass, "", {VK_CONTROL, VK_F9}) != "120") {
+      folder.clear();
+      return -6;
     }
   } catch (...) {
     folder.clear();

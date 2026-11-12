@@ -382,8 +382,10 @@ static std::vector<Action> scanBindings(const std::vector<std::string> &mods,
         if (sep == entry.npos)
           continue;
         auto field = entry.substr(0, sep);
-        if (!bindingField(field) && !uiRank(sec, field) && !toggleRank(sec, field) &&
-            !describedField(sources, Action{"", module, file, sec, field}))
+        const Action probe{"", module, file, sec, field};
+        if (ignoredField(sources, probe) ||
+            (!bindingField(field) && !uiRank(sec, field) && !toggleRank(sec, field) &&
+             !describedField(sources, probe)))
           continue;
         // A single modifier flag is supported; unknown modifier metadata is
         // skipped, rather than sending a possibly incomplete combination.
