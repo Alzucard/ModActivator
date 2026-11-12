@@ -46,7 +46,6 @@ static bool migrateUserConfig(const std::string &old) {
   const auto user = userConfigPath();
   if (fileExists(user) || !fileExists(old))
     return false;
-  ensureDataFolder();
   bool copied = false;
   for (const char *name : {"BindingTypes", "ModLayout"}) {
     const auto section = readProfileSection(name, old);
@@ -63,52 +62,65 @@ static bool migrateUserConfig(const std::string &old) {
   return copied;
 }
 
-// Versions before the ModActivator folder kept every file beside the plugin
-// in bin64. Moves them into the folder at the first start of this version.
-// Runs before the log is opened, since the log is one of the files, so it
-// returns what it did for the log instead of writing it.
-static std::vector<std::string> moveIntoDataFolder() {
+// Puts files older versions left in the wrong place where this one looks.
+// 1.3 kept its INIs in the ModActivator folder, which DMM never installs, so
+// they move back beside the plugin; before 1.3 the log sat in bin64, and it
+// moves into the folder. Runs before the log is opened, since the log is one
+// of the files, so it returns what it did for the log instead of writing it.
+static std::vector<std::string> relocateFiles() {
   std::vector<std::string> done;
-  const auto moveFile = [&](const char *name) {
-    const auto from = folder + name, to = dataPath(name);
-    if (!fileExists(from) || fileExists(to))
-      return;
-    ensureDataFolder();
-    if (MoveFileExA(from.c_str(), to.c_str(), MOVEFILE_COPY_ALLOWED))
-      done.push_back(std::string("Moved ") + name + " into the " + dataFolderName + " folder.");
+  const auto move = [&](const std::string &from, const std::string &to) {
+    return fileExists(from) && !fileExists(to) &&
+           MoveFileExA(from.c_str(), to.c_str(), MOVEFILE_COPY_ALLOWED);
   };
-  for (const char *name : {"ModActivator.User.ini", "ModActivator.KnownMods.ini",
-                           "ModActivator.log.old", "ModActivator.log"})
-    moveFile(name);
+  for (const char *name : {"ModActivator.log.old", "ModActivator.log"})
+    if (fileExists(configPath(name))) {
+      ensureDataFolder();
+      if (move(configPath(name), dataPath(name)))
+        done.push_back(std::string("Moved ") + name + " into the " + dataFolderName + " folder.");
+    }
 
-  const auto oldIni = folder + "ModActivator.ini", newIni = dataPath("ModActivator.ini");
-  if (!fileExists(oldIni))
-    return done;
-  // The menu's choices from before ModActivator.User.ini, wherever the
-  // settings file ends up.
-  if (migrateUserConfig(oldIni))
+  // Your choices. Should bin64 already hold a user file, that one is kept and
+  // the folder's copy renamed, so neither is lost and this happens once.
+  const auto user = userConfigPath(), oldUser = dataPath("ModActivator.User.ini");
+  if (move(oldUser, user))
+    done.push_back("Moved ModActivator.User.ini from the ModActivator folder back to bin64.");
+  else if (fileExists(oldUser) &&
+           MoveFileExA(oldUser.c_str(), (oldUser + ".moved").c_str(), MOVEFILE_REPLACE_EXISTING))
+    done.push_back("Kept bin64\ModActivator.User.ini and renamed the one in the ModActivator "
+                   "folder ModActivator.User.ini.moved. It can be deleted.");
+
+  // The known-mods list is shipped, never edited: a newer copy in bin64 wins.
+  const auto known = configPath("ModActivator.KnownMods.ini"),
+             oldKnown = dataPath("ModActivator.KnownMods.ini");
+  if (fileExists(oldKnown) && !move(oldKnown, known) && DeleteFileA(oldKnown.c_str()))
+    done.push_back("Removed the old ModActivator.KnownMods.ini from the ModActivator folder.");
+
+  // The settings file. Alone in the folder it is yours and moves as it is;
+  // beside a fresh one in bin64, the options you set carry over into that
+  // and the old one is renamed, so this happens once and later edits stand.
+  const auto ini = configPath("ModActivator.ini"), oldIni = dataPath("ModActivator.ini");
+  if (move(oldIni, ini)) {
+    done.push_back("Moved ModActivator.ini from the ModActivator folder back to bin64.");
+  } else if (fileExists(oldIni)) {
+    const auto general = readProfileSection("General", oldIni);
+    for (const char *line = general.data(); *line; line += strlen(line) + 1) {
+      const std::string entry = line;
+      const auto eq = entry.find('=');
+      if (eq != entry.npos && eq)
+        WritePrivateProfileStringA("General", entry.substr(0, eq).c_str(),
+                                   entry.substr(eq + 1).c_str(), ini.c_str());
+    }
+    if (MoveFileExA(oldIni.c_str(), (oldIni + ".moved").c_str(), MOVEFILE_REPLACE_EXISTING))
+      done.push_back("Carried your [General] options from ModActivator\ModActivator.ini into "
+                     "bin64\ModActivator.ini, and renamed the old one ModActivator.ini.moved. "
+                     "It can be deleted.");
+  }
+
+  // Before 1.3, the menu's choices were in ModActivator.ini itself.
+  if (migrateUserConfig(ini))
     done.push_back("Moved your menu settings from ModActivator.ini to ModActivator.User.ini, "
                    "where updates no longer replace them.");
-  if (!fileExists(newIni)) {
-    // Only the old file: it is yours, so it moves as it is.
-    moveFile("ModActivator.ini");
-    return done;
-  }
-  // The update brought a fresh ModActivator.ini into the folder. The options
-  // you set in the old one carry over into it, and the old one is renamed so
-  // this happens only once and later edits to the new one stand.
-  const auto general = readProfileSection("General", oldIni);
-  for (const char *line = general.data(); *line; line += strlen(line) + 1) {
-    const std::string entry = line;
-    const auto eq = entry.find('=');
-    if (eq != entry.npos && eq)
-      WritePrivateProfileStringA("General", entry.substr(0, eq).c_str(),
-                                 entry.substr(eq + 1).c_str(), newIni.c_str());
-  }
-  if (MoveFileExA(oldIni.c_str(), (oldIni + ".moved").c_str(), MOVEFILE_REPLACE_EXISTING))
-    done.push_back("Carried your [General] options from the old ModActivator.ini into " +
-                   std::string(dataFolderName) + "\\ModActivator.ini, and renamed the old one "
-                   "ModActivator.ini.moved. It can be deleted.");
   return done;
 }
 
@@ -120,7 +132,7 @@ static void loadLayout() {
   GetPrivateProfileStringA("General", "OpenShortcut", "", value, sizeof value, path.c_str());
   if (!value[0])
     GetPrivateProfileStringA("General", "OpenShortcut", "", value, sizeof value,
-                             dataPath("ModActivator.ini").c_str());
+                             configPath("ModActivator.ini").c_str());
   const auto code = shortcutCode(parseShortcut(value));
   opener.store(code && (code & 0xff) != VK_ESCAPE ? code : defaultOpener);
   // The controller shortcut, the same way. None turns it off; a single button
@@ -129,7 +141,7 @@ static void loadLayout() {
   GetPrivateProfileStringA("General", "PadOpenShortcut", "", pad, sizeof pad, path.c_str());
   if (!pad[0])
     GetPrivateProfileStringA("General", "PadOpenShortcut", "", pad, sizeof pad,
-                             dataPath("ModActivator.ini").c_str());
+                             configPath("ModActivator.ini").c_str());
   const unsigned padBits = padButtonsFrom(pad);
   const bool off = !_stricmp(trimConfigLine(pad).c_str(), "none");
   padOpener.store(off ? 0 : __builtin_popcount(padBits) >= 2 ? padBits : defaultPadOpener);

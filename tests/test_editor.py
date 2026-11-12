@@ -40,7 +40,7 @@ with TemporaryDirectory(dir=p) as tmp:
     migration.argtypes = [ctypes.c_char_p]
     result = migration((str(tmp) + '\\').encode())
     assert result == 0, f'Migration check failed at step {result}'
-print('PASS: menu choices live in ModActivator.User.ini, moved once from an older ModActivator.ini.')
+print('PASS: menu choices live in ModActivator.User.ini, moved once from an older ModActivator.ini; 1.3 INIs move back to bin64.')
 print('PASS: typed and captured chords, numeric modifier retention, keyboard layout mapping, saved opener, built-in and custom tab placement, stable binding labels and comments across type changes.')
 
 commented = b'[Menu]\r\nHotkey=F8 ; note | kept verbatim\r\n'

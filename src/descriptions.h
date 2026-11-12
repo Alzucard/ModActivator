@@ -5,7 +5,7 @@
 //   1. your own name and note, saved in ModActivator.User.ini
 //   2. the mod itself, through the optional ModActivatorBindingsV1 export
 //      (see include/ModActivatorBindings.h)
-//   3. ModActivator.KnownMods.ini, shipped in the ModActivator folder
+//   3. ModActivator.KnownMods.ini, shipped beside the plugin in bin64
 //   4. the comment beside the setting in the mod's config file
 //   5. a readme next to the mod's config file
 //
@@ -174,7 +174,7 @@ static KnownMods parseKnownMods(const std::string &text) {
 }
 
 static KnownMods loadKnownMods() {
-  std::ifstream file(dataPath("ModActivator.KnownMods.ini"), std::ios::binary);
+  std::ifstream file(configPath("ModActivator.KnownMods.ini"), std::ios::binary);
   if (!file)
     return {};
   std::string text(std::istreambuf_iterator<char>(file), {});

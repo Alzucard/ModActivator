@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+- Keep the INI files (`ModActivator.ini`, `ModActivator.KnownMods.ini`, `ModActivator.User.ini`) in `bin64` again, beside the plugin: DMM installs a release's files there but not its subfolders, so DMM installs had no settings file and no known-mods list. Only the log, the documentation and the licences stay in the `ModActivator` folder, which ModActivator creates for the log when it is missing.
+- On the first start, move 1.3's files back: `ModActivator.User.ini` to `bin64` (a copy already there wins, the folder's is renamed `.moved`), your `[General]` options from the folder's `ModActivator.ini` into the new one (the old one renamed `.moved`), and the old known-mods list removed.
+
 ## 1.3.1
 - Show mods' whole names on the group headers in the Hotkeys and Settings tabs. Long names were cut off at the first column ("Mount and Pet W").
 - Say "1 conflict" and "1 possible overlap" instead of "1 conflicts".

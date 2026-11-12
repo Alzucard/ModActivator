@@ -118,7 +118,7 @@ ModActivatorBindingsV1(unsigned *count) {
 
 ## 3. The known-mods list
 
-`ModActivator\ModActivator.KnownMods.ini` ships with ModActivator and describes popular mods that do not export anything. Its header explains the format; one entry looks like:
+`ModActivator.KnownMods.ini` ships with ModActivator, beside it in `bin64`, and describes popular mods that do not export anything. Its header explains the format; one entry looks like:
 
 ```ini
 [MyMod.ini]

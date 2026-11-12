@@ -10,7 +10,7 @@ m = ctypes.WinDLL(str(pathlib.Path('build/ModActivator-tests.asi').resolve()))
 fn = m.ModActivatorCatalogTest
 fn.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int]
 
-(root / 'ModActivator/ModActivator.KnownMods.ini').write_text(
+(root / 'ModActivator.KnownMods.ini').write_text(
     '[@reserved]\n'
     'F12 = Steam: screenshot\n'
     'Alt+F4 = Windows: close the game\n'
@@ -22,7 +22,7 @@ fn.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int]
     '[Linked.ini]\n'
     'Jump = action | Jump | Its controller button is in a setting the list names. | | MyPad\n',
     encoding='utf-8')
-(root / 'ModActivator/ModActivator.User.ini').write_text(
+(root / 'ModActivator.User.ini').write_text(
     '[BindingTypes]\nguess.ini|menu|togglekey=2\n'
     '[ReservedKeys]\nI = Game: inventory\n')
 (root / 'Storage.ini').write_text('[Keys]\nOpen=F2\nDresser=F3\nGhost=F9\nMark=F11\n')

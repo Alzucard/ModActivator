@@ -80,18 +80,19 @@ def link(path, tests):
 link(out / 'ModActivator.asi', False)
 link(obj / 'ModActivator-tests.asi', True)
 
-# dist/ mirrors bin64: the plugin at the top, where the ASI loader looks, and
-# everything else in a ModActivator folder beside it. What earlier builds
-# staged at the top goes, so the folder can be copied into bin64 as it is.
-for name in ['ModActivator.ini', 'ModActivator.KnownMods.ini', 'README.md', 'LICENSE',
-             'THIRD_PARTY_NOTICES.md', 'CHANGELOG.md']:
+# dist/ mirrors bin64: the plugin and its INI files at the top, where the
+# ASI loader and DMM put them (DMM does not install a release's subfolders),
+# and the documentation and licences in a ModActivator folder beside them,
+# for manual installs. ModActivator writes its log into that folder too.
+for name in ['README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'CHANGELOG.md']:
     (out / name).unlink(missing_ok=True)
 for name in ['include', 'licenses', 'ModActivator']:
     shutil.rmtree(out / name, ignore_errors=True)
+inis = [base / 'ModActivator.ini', base / 'data/ModActivator.KnownMods.ini']
+for ini in inis:
+    shutil.copy2(ini, out / ini.name)
 data = out / 'ModActivator'
 data.mkdir()
-shutil.copy2(base / 'ModActivator.ini', data / 'ModActivator.ini')
-shutil.copy2(base / 'data/ModActivator.KnownMods.ini', data / 'ModActivator.KnownMods.ini')
 # The export header is not part of the mod: ModActivator never reads it. Mod
 # authors get it in the modder kit below.
 # Distributable documentation and required third-party notices.
@@ -115,6 +116,8 @@ print('Built ' + str(obj / 'ExampleMod.asi'))
 version = (base / 'VERSION').read_text(encoding='utf-8').strip()
 with zipfile.ZipFile(out / f'ModActivator-{version}.zip', 'w', zipfile.ZIP_DEFLATED) as z:
     z.write(out / 'ModActivator.asi', 'bin64/ModActivator.asi')
+    for ini in inis:
+        z.write(out / ini.name, 'bin64/' + ini.name)
     for path in sorted(p for p in data.rglob('*') if p.is_file()):
         z.write(path, 'bin64/ModActivator/' + path.relative_to(data).as_posix())
 with zipfile.ZipFile(out / f'ModActivator-{version}-ModderKit.zip', 'w', zipfile.ZIP_DEFLATED) as z:

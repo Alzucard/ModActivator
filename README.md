@@ -18,28 +18,30 @@ The panel uses a charcoal-and-gold theme with larger text, searchable mod cards,
 
 ## Install
 
-Close Crimson Desert. Extract `ModActivator-<version>.zip` into the game's folder (the one that holds `bin64`), or install it with a mod manager such as DMM. That puts `ModActivator.asi` and the `ModActivator` folder in `bin64`, beside `CrimsonDesert.exe`. An ASI loader is required.
+Close Crimson Desert. Extract `ModActivator-<version>.zip` into the game's folder (the one that holds `bin64`), or install it with a mod manager such as DMM. That puts `ModActivator.asi` and its INI files in `bin64`, beside `CrimsonDesert.exe`. An ASI loader is required.
 
 ```
 bin64\
   ModActivator.asi                 the plugin; the ASI loader only looks here
+  ModActivator.ini                 options
+  ModActivator.KnownMods.ini       what popular mods' shortcuts do
+  ModActivator.User.ini            your menu choices, created when you first save one
   ModActivator\
-    ModActivator.ini               options
-    ModActivator.KnownMods.ini     what popular mods' shortcuts do
-    ModActivator.User.ini          your menu choices, created when you first save one
     ModActivator.log               this session's log (and .log.old, the last one)
-    README.md, LICENSE, ...        documentation and licences
+    README.md, LICENSE, ...        documentation and licences (manual installs)
 ```
 
-Updating from a version that kept its files directly in `bin64`: install as above. The first start moves the old files into the folder, carries your `[General]` options into the new `ModActivator.ini`, and renames the old one `ModActivator.ini.moved`, which can then be deleted. The log says what was moved.
+The INI files sit in `bin64` itself because DMM installs a release's files there but not its subfolders. ModActivator creates the `ModActivator` folder for its log if it is missing.
+
+Updating from 1.3.0 or 1.3.1, which kept the INI files in the `ModActivator` folder: install as above. The first start moves your `ModActivator.User.ini` back to `bin64`, carries the `[General]` options you set into the new `ModActivator.ini`, renames the old one `ModActivator.ini.moved`, and removes the old known-mods list. The log says what was moved.
 
 Launch the game and press **Ctrl+Shift+Backspace**.
 
-Everything you set in the menu (the panel shortcut, binding types, tabs, card order, and your names and notes) is saved in `ModActivator\ModActivator.User.ini`. No release includes that file, so updating, by hand or with a mod manager, never replaces it, and the new `ModActivator.ini` can simply overwrite the old one. Versions before this kept those choices in `ModActivator.ini`. The first start of this version copies them over once and says so in the log.
+Everything you set in the menu (the panel shortcut, binding types, tabs, card order, and your names and notes) is saved in `ModActivator.User.ini`. No release includes that file, so updating, by hand or with a mod manager, never replaces it, and the new `ModActivator.ini` can simply overwrite the old one. Versions before this kept those choices in `ModActivator.ini`. The first start of this version copies them over once and says so in the log.
 
 With ReShade 6.8.0 or newer, ModActivator draws through ReShade's add-on callbacks, after ReShade's effects and overlay. With an older ReShade it falls back to the legacy DirectX path automatically. Set `UseReShadeEvents=0` under `[General]` to always use the legacy path. On the legacy path, try `WrapSwapChain=1` if the overlay is invisible with frame generation. Set `HookXInput=0` if the controller should keep reaching the game while the menu is open.
 
-`ModActivator\ModActivator.log` is started fresh each launch, and the previous one is kept as `ModActivator.log.old`. Set `DebugInput=1` to add cursor and raw input diagnostics each time the menu opens.
+`ModActivator\ModActivator.log` (in the folder) is started fresh each launch, and the previous one is kept as `ModActivator.log.old`. Set `DebugInput=1` to add cursor and raw input diagnostics each time the menu opens.
 
 ## Binding types
 
@@ -77,13 +79,13 @@ Discovery matches loaded ASI/addon64 modules to INI filenames or matching parent
 
 Mods whose menus are controlled by ModHub are marked accordingly and must be opened through ModHub. The plugin sends shortcuts; it does not load or unload other ASIs. A dispatched shortcut is not proof that the destination mod acted on it. Toggle states cannot be universally inferred.
 
-Conflict detection covers recognized keyboard settings, including secondary gameplay keys, the controller combinations mods keep beside them, ModActivator's own shortcuts, and keys reserved outside the mods: Steam's default screenshot and overlay keys and Windows' Alt+Tab, Alt+F4, Ctrl+Shift+Esc and Print Screen. The game's own controls are not known to ModActivator; add the ones you care about under `[ReservedKeys]` in `ModActivator\ModActivator.User.ini`, one per line, such as `I = Game: inventory`. Unknown bindings are not covered.
+Conflict detection covers recognized keyboard settings, including secondary gameplay keys, the controller combinations mods keep beside them, ModActivator's own shortcuts, and keys reserved outside the mods: Steam's default screenshot and overlay keys and Windows' Alt+Tab, Alt+F4, Ctrl+Shift+Esc and Print Screen. The game's own controls are not known to ModActivator; add the ones you care about under `[ReservedKeys]` in `ModActivator.User.ini`, one per line, such as `I = Game: inventory`. Unknown bindings are not covered.
 
 Controller buttons are read wherever mods keep them: after the key in the same value (`F8|LeftStick,RightStick,A`), or in a setting beside it (`PadToggle=BACK+LS` for `ToggleKey`, `StanceCycleButtons=L1+Down` for `StanceCycleKey`), as XInput or PlayStation names or as XInput's button bits. They are shown and checked, not edited; change them in the mod's own config.
 
 ## Controller
 
-Hold **LB + RB**, then press **Back**, to open or close the panel. The buttons of that combination are kept from the game while you hold them, so the final press does not also act in the game. Change it or switch it off under **Settings → Record controller shortcut** (two buttons or more), or with `PadOpenShortcut` in `ModActivator\ModActivator.ini` (`None` for off). With `HookXInput=0` the shortcut still works, but the game sees those buttons too.
+Hold **LB + RB**, then press **Back**, to open or close the panel. The buttons of that combination are kept from the game while you hold them, so the final press does not also act in the game. Change it or switch it off under **Settings → Record controller shortcut** (two buttons or more), or with `PadOpenShortcut` in `ModActivator.ini` (`None` for off). With `HookXInput=0` the shortcut still works, but the game sees those buttons too.
 
 In the panel, the d-pad or left stick moves between items, A presses, B backs out of a field or a list, and LB or RB pressed on its own goes to the previous or next tab. Mod menus and toggles are still opened with their keyboard shortcuts, which ModActivator sends for you.
 
@@ -107,7 +109,7 @@ Automated checks cover parsing, discovery, config editing and preservation, back
 
 ## Uninstall
 
-With the game closed, remove `ModActivator.asi` and the `ModActivator` folder from `bin64`. Keep `ModActivator\ModActivator.User.ini` if you might reinstall and want your menu settings back. Restore edited configs from their backups if needed; uninstalling does not undo previous hotkey edits.
+With the game closed, remove `ModActivator.asi`, `ModActivator.ini`, `ModActivator.KnownMods.ini` and the `ModActivator` folder from `bin64`. Keep `ModActivator.User.ini` if you might reinstall and want your menu settings back. Restore edited configs from their backups if needed; uninstalling does not undo previous hotkey edits.
 
 ## Credits
 

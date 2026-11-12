@@ -7,13 +7,13 @@ import ctypes, pathlib, shutil
 root = pathlib.Path('build/description-tests').resolve()
 shutil.rmtree(root, ignore_errors=True)
 root.mkdir(parents=True)
-(root / 'ModActivator').mkdir()  # ModActivator's own files
+(root / 'ModActivator').mkdir()  # the log folder
 dll = pathlib.Path('build/ModActivator-tests.asi').resolve()
 m = ctypes.WinDLL(str(dll))
 fn = m.ModActivatorDescribeTest
 fn.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int]
 
-(root / 'ModActivator/ModActivator.KnownMods.ini').write_text(
+(root / 'ModActivator.KnownMods.ini').write_text(
     '; fixture database\n'
     '[PrivateStorageAnywhere.ini]\n'
     '@mod = Private Storage Anywhere | Opens storage from anywhere.\n'
@@ -70,10 +70,10 @@ fn.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int]
 # ModActivator.User.ini, which no release ships; the same sections in the
 # shipped ModActivator.ini, which an update replaces, are not read.
 mine = 'commented.ini|menu|hotkey'
-(root / 'ModActivator/ModActivator.User.ini').write_text(
+(root / 'ModActivator.User.ini').write_text(
     '[BindingNames]\n' + mine + '=' + 'Mein Fenster'.encode().hex() + '\n'
     '[BindingNotes]\n' + mine + '=' + 'Meine Notiz\nöffnet es'.encode().hex() + '\n')
-(root / 'ModActivator/ModActivator.ini').write_text(
+(root / 'ModActivator.ini').write_text(
     '[BindingNames]\ncombined.ini|menu|hotkey=' + 'Not read'.encode().hex() + '\n')
 
 modules = ';'.join(['PrivateStorageAnywhere.asi', 'DynamicScalify.asi', 'Combined.asi',

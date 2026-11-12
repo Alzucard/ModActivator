@@ -30,14 +30,16 @@ static bool previewMode = false;
 static int previewTab = 0;
 // The plugin's folder (bin64), where the mods and their configs are.
 static std::string folder;
-// ModActivator's own files (its settings, your choices, the known-mods list
-// and the log) are in a folder of their own inside it, so bin64 holds only
-// ModActivator.asi. The plugin itself must stay in bin64 for the loader.
+// ModActivator's INI files (its settings, your choices and the known-mods
+// list) sit beside the plugin in bin64: DMM installs the files there but not
+// a release's subfolders. What ModActivator writes for itself, the log, goes
+// into a ModActivator folder inside bin64, created when needed.
+static std::string configPath(const char *name) { return folder + name; }
 static constexpr char dataFolderName[] = "ModActivator";
 static std::string dataPath(const char *name) {
   return folder + dataFolderName + "\\" + name;
 }
-// Before writing one of those files: the folder may not exist yet.
+// Before writing into the folder: it may not exist yet.
 static void ensureDataFolder() {
   CreateDirectoryA((folder + dataFolderName).c_str(), nullptr);
 }
@@ -1137,15 +1139,16 @@ static DWORD WINAPI start(void *arg) {
             "Move the game to a path with plain characters, or enable 8.3 names on that drive.");
     return 0;
   }
-  // Files an older version left in bin64 move into the ModActivator folder
-  // first, the log among them, so the log opens after and records the move.
-  const auto moved = moveIntoDataFolder();
+  // Files older versions left in the wrong place move first: the INIs 1.3
+  // kept in the ModActivator folder back to bin64, and a log from before 1.3
+  // into the folder. The log opens after, and records the moves.
+  const auto moved = relocateFiles();
   ml::Log::Begin();
   LOG("Mod Activator " MODACTIVATOR_VERSION " started.");
   for (const auto &line : moved)
     LOG("%s", line.c_str());
   loadLayout();
-  const auto config = dataPath("ModActivator.ini");
+  const auto config = configPath("ModActivator.ini");
   ml::Settings::Get().wrapSwapChain =
       GetPrivateProfileIntA("General", "WrapSwapChain", 0, config.c_str()) != 0;
   ml::Settings::Get().enableDred =
@@ -1362,15 +1365,15 @@ ModActivatorSettingsTest(const char *root) {
   refreshRequested.store(false);
   return result;
 }
-// The move of the menu's choices out of ModActivator.ini, and of every file
-// out of bin64 into the ModActivator folder. root is an empty folder; each
+// The move of the menu's choices out of ModActivator.ini, and of 1.3's INIs
+// out of the ModActivator folder back to bin64. root is an empty folder; each
 // case writes its own ModActivator.ini.
 extern "C" __declspec(dllexport) int ModActivatorMigrationTest(const char *root) {
   if (!folder.empty() || !root)
     return -1;
   folder = root;
   ensureDataFolder();
-  const auto old = dataPath("ModActivator.ini"), user = userConfigPath();
+  const auto old = configPath("ModActivator.ini"), user = userConfigPath();
   const auto exists = [](const std::string &p) {
     return GetFileAttributesA(p.c_str()) != INVALID_FILE_ATTRIBUTES;
   };
@@ -1417,34 +1420,42 @@ extern "C" __declspec(dllexport) int ModActivatorMigrationTest(const char *root)
         readBindingType(probe) != 3)
       return 7;
 
-    // A version from before the folder: everything sits in bin64, its
-    // settings file holds your options and your old menu choices.
-    for (const char *name : {"ModActivator.ini", "ModActivator.User.ini", "ModActivator.log"})
-      DeleteFileA(dataPath(name).c_str());
-    const auto rootIni = folder + "ModActivator.ini";
-    std::ofstream(rootIni) << "[General]\nHookXInput=0\n[BindingTypes]\nmod.ini|menu|hotkey=2\n";
+    // A 1.3 install: the INIs in the ModActivator folder, where DMM never put
+    // them, and a log from before 1.3 still in bin64. All of it moves.
+    for (const char *name : {"ModActivator.ini", "ModActivator.User.ini"})
+      DeleteFileA(configPath(name).c_str());
+    const auto folderIni = dataPath("ModActivator.ini"), folderUser = dataPath("ModActivator.User.ini"),
+               folderKnown = dataPath("ModActivator.KnownMods.ini"),
+               known = configPath("ModActivator.KnownMods.ini");
+    std::ofstream(folderIni) << "[General]\nHookXInput=0\n";
+    std::ofstream(folderUser) << "[BindingTypes]\nmod.ini|menu|hotkey=2\n";
+    std::ofstream(folderKnown) << "[mod.ini]\n";
     std::ofstream(folder + "ModActivator.log") << "old log\n";
-    auto moved = moveIntoDataFolder();
-    if (exists(rootIni) || exists(folder + "ModActivator.log") || !exists(dataPath("ModActivator.log")) ||
+    auto moved = relocateFiles();
+    if (exists(folderIni) || exists(folderUser) || exists(folderKnown) || !exists(known) ||
+        exists(folder + "ModActivator.log") || !exists(dataPath("ModActivator.log")) ||
         GetPrivateProfileIntA("General", "HookXInput", 1, old.c_str()) != 0 ||
         readBindingType(probe) != 2 || moved.size() != 3)
       return 8;
-    // The update shipped a fresh ModActivator.ini into the folder while the
-    // old one is still in bin64: your options carry over into the new one,
-    // its comments stay, and the old one is renamed so this happens once.
+    // An update brought fresh INIs into bin64 while the folder still has the
+    // 1.3 ones: your options carry over, the shipped comments stay, your
+    // bin64 choices win, and the old files are renamed or removed, once.
     std::ofstream(old) << "[General]\n; shipped comment\nHookXInput=1\nUseReShadeEvents=1\n";
-    std::ofstream(rootIni) << "[General]\nHookXInput=0\n";
-    moveIntoDataFolder();
+    std::ofstream(folderIni) << "[General]\nHookXInput=0\n";
+    std::ofstream(folderUser) << "[BindingTypes]\nmod.ini|menu|hotkey=1\n";
+    std::ofstream(folderKnown) << "[old.ini]\n";
+    relocateFiles();
     std::ifstream fresh(old);
     const std::string text(std::istreambuf_iterator<char>(fresh), {});
     fresh.close();
-    if (exists(rootIni) || !exists(rootIni + ".moved") ||
+    if (exists(folderIni) || !exists(folderIni + ".moved") || exists(folderUser) ||
+        !exists(folderUser + ".moved") || exists(folderKnown) || readBindingType(probe) != 2 ||
         GetPrivateProfileIntA("General", "HookXInput", 1, old.c_str()) != 0 ||
         GetPrivateProfileIntA("General", "UseReShadeEvents", 0, old.c_str()) != 1 ||
         text.find("; shipped comment") == text.npos)
       return 9;
     WritePrivateProfileStringA("General", "HookXInput", "1", old.c_str());
-    if (!moveIntoDataFolder().empty() ||
+    if (!relocateFiles().empty() ||
         GetPrivateProfileIntA("General", "HookXInput", 0, old.c_str()) != 1)
       return 10;
     return 0;
@@ -1661,7 +1672,7 @@ extern "C" __declspec(dllexport) int ModActivatorControllerTest(const char *root
   folder = root;
   const int result = [&] {
     ensureDataFolder();
-    const auto user = userConfigPath(), shipped = dataPath("ModActivator.ini");
+    const auto user = userConfigPath(), shipped = configPath("ModActivator.ini");
     const auto loaded = [&](const char *mine, const char *theirs) {
       WritePrivateProfileStringA("General", "PadOpenShortcut", mine, user.c_str());
       WritePrivateProfileStringA("General", "PadOpenShortcut", theirs, shipped.c_str());
