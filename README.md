@@ -18,13 +18,12 @@ The panel uses a charcoal-and-gold theme with larger text, searchable mod cards,
 
 ## Install
 
-Close Crimson Desert. Extract `ModActivator-<version>.zip` into the game's folder (the one that holds `bin64`), or install it with a mod manager such as DMM. That puts `ModActivator.asi` and its INI files in `bin64`, beside `CrimsonDesert.exe`. An ASI loader is required.
+Close Crimson Desert. Extract `ModActivator-<version>.zip` into the game's folder (the one that holds `bin64`), or install it with a mod manager such as DMM. That puts `ModActivator.asi` and `ModActivator.ini` in `bin64`, beside `CrimsonDesert.exe`. An ASI loader is required.
 
 ```
 bin64\
   ModActivator.asi                 the plugin; the ASI loader only looks here
   ModActivator.ini                 options
-  ModActivator.KnownMods.ini       what popular mods' shortcuts do
   ModActivator.User.ini            your menu choices, created when you first save one
   ModActivator\
     ModActivator.log               this session's log (and .log.old, the last one)
@@ -53,7 +52,7 @@ Each binding's name and description come from the most trustworthy source that h
 
 1. **Your own name and note.** Select a binding in **Hotkeys**, fill in **Name** and **Note**, and click **Save name and note**. They take effect at once and are saved in `ModActivator.User.ini`, so updating ModActivator or the mod never replaces them. **Clear mine** goes back to the other sources.
 2. **The mod itself**, for mods that describe their shortcuts to ModActivator (see below).
-3. **`ModActivator.KnownMods.ini`**, a list of what the shortcuts of about 50 popular Crimson Desert mods do, written from their Nexus Mods pages and config files. It also tells ModActivator about settings whose names do not look like shortcuts (and ones that only look like shortcuts), about mods that write key codes in hexadecimal, and about modifiers a mod keeps in a setting of its own, such as Gilded Compass's `HotkeyCtrl=1`, so the full combination is sent. It is replaced on update; put your own changes in your notes instead.
+3. **The known-mods list**, built into `ModActivator.asi` (its source is `data/ModActivator.KnownMods.ini`): what the shortcuts of about 50 popular Crimson Desert mods do, written from their Nexus Mods pages and config files. It also tells ModActivator about settings whose names do not look like shortcuts (and ones that only look like shortcuts), about mods that write key codes in hexadecimal, and about modifiers a mod keeps in a setting of its own, such as Gilded Compass's `HotkeyCtrl=1`, so the full combination is sent. It is built into the plugin because DMM does not install it as a file of its own, and it is replaced with every update; put your own changes in your notes instead. A `ModActivator.KnownMods.ini` beside the plugin is still read, but only adds config files the built-in list does not know, and reserved keys.
 4. **The comment** beside the setting in the mod's config file.
 5. **A readme** next to the mod's config file: a `.txt` or `.md` file named `readme…` or after the mod.
 
@@ -109,7 +108,7 @@ Automated checks cover parsing, discovery, config editing and preservation, back
 
 ## Uninstall
 
-With the game closed, remove `ModActivator.asi`, `ModActivator.ini`, `ModActivator.KnownMods.ini` and the `ModActivator` folder from `bin64`. Keep `ModActivator.User.ini` if you might reinstall and want your menu settings back. Restore edited configs from their backups if needed; uninstalling does not undo previous hotkey edits.
+With the game closed, remove `ModActivator.asi`, `ModActivator.ini` and the `ModActivator` folder from `bin64` (and a `ModActivator.KnownMods.ini`, which versions 1.3.2 to 1.3.4 put there). Keep `ModActivator.User.ini` if you might reinstall and want your menu settings back. Restore edited configs from their backups if needed; uninstalling does not undo previous hotkey edits.
 
 ## Credits
 

@@ -118,7 +118,7 @@ ModActivatorBindingsV1(unsigned *count) {
 
 ## 3. The known-mods list
 
-`ModActivator.KnownMods.ini` ships with ModActivator, beside it in `bin64`, and describes popular mods that do not export anything. Its header explains the format; one entry looks like:
+The known-mods list is built into `ModActivator.asi` and describes popular mods that do not export anything. Its source, `data/ModActivator.KnownMods.ini` in the repository (and `reference/ModActivator.KnownMods.ini` in this kit), explains the format in its header; one entry looks like:
 
 ```ini
 [MyMod.ini]
@@ -135,5 +135,7 @@ It can also say things your config file cannot:
 - after the description, modifiers your mod keeps elsewhere: `| Ctrl?HotkeyCtrl` (Ctrl while that flag is 1), `| =OpenKey2WithVk` (the modifier that setting names);
 - after those, the setting that holds the controller buttons, when its name does not give it away;
 - `Key = ignore` for a setting that only looks like a shortcut.
+
+To try an entry before sending it in, put it in a `ModActivator.KnownMods.ini` beside `ModActivator.asi` in `bin64`. That file is read on top of the built-in list, but only for config files the built-in list does not know (and for `[@reserved]` keys), so it cannot change an existing entry.
 
 To be added, or to correct an entry, open an issue or a pull request at https://github.com/Alzucard/ModActivator with your mod's Nexus link and config file.

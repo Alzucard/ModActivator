@@ -160,3 +160,12 @@ assert row['source'] == MOD and row['name'] == 'Exported name' and row['feature'
 assert row['description'] == 'Described by the mod itself.', row
 assert rows[dll.stem + '.ini', 'Hotkeys', 'OtherKey']['source'] == COMMENT
 print('PASS: the mod export names, describes and classifies its binding.')
+
+known_root = pathlib.Path('build/known-mods-test').resolve()
+shutil.rmtree(known_root, ignore_errors=True)
+known_root.mkdir(parents=True)
+known = m.ModActivatorKnownModsTest
+known.argtypes = [ctypes.c_char_p]
+result = known((str(known_root) + '\\').encode())
+assert result == 0, f'Known-mods check failed at step {result}'
+print('PASS: the known-mods list is built in; a file beside the plugin only adds to it.')

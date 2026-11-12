@@ -90,10 +90,9 @@ static std::vector<std::string> relocateFiles() {
     done.push_back("Kept bin64\\ModActivator.User.ini and renamed the one in the ModActivator "
                    "folder ModActivator.User.ini.moved. It can be deleted.");
 
-  // The known-mods list is shipped, never edited: a newer copy in bin64 wins.
-  const auto known = configPath("ModActivator.KnownMods.ini"),
-             oldKnown = dataPath("ModActivator.KnownMods.ini");
-  if (fileExists(oldKnown) && !move(oldKnown, known) && DeleteFileA(oldKnown.c_str()))
+  // 1.3's copy of the known-mods list, which is built into the plugin now.
+  const auto oldKnown = dataPath("ModActivator.KnownMods.ini");
+  if (fileExists(oldKnown) && DeleteFileA(oldKnown.c_str()))
     done.push_back("Removed the old ModActivator.KnownMods.ini from the ModActivator folder.");
 
   // The settings file. Alone in the folder it is yours and moves as it is;

@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Build the known-mods list into `ModActivator.asi`. DMM does not install `ModActivator.KnownMods.ini`, so DMM installs had no names or descriptions for popular mods and no Steam and Windows key conflicts. A `ModActivator.KnownMods.ini` beside the plugin is still read, but only adds config files the built-in list does not know (and reserved keys), so the copy 1.3.2 to 1.3.4 left in `bin64` cannot override the newer list.
 - Fix **Send** on a mod's menu shortcut in the Hotkeys tab leaving the panel open over the mod's menu. It closes now, as the mod menu cards always did.
 - Fix recording a controller shortcut in Settings: starting it with A no longer records just A, and while it records, the buttons no longer also press, back out of or switch tabs in the panel.
 - Fix three log lines about moving 1.3's files that dropped the backslash from `bin64\ModActivator...`.

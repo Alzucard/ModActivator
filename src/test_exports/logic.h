@@ -253,10 +253,10 @@ extern "C" __declspec(dllexport) int ModActivatorMigrationTest(const char *root)
     std::ofstream(folderKnown) << "[mod.ini]\n";
     std::ofstream(folder + "ModActivator.log") << "old log\n";
     auto moved = relocateFiles();
-    if (exists(folderIni) || exists(folderUser) || exists(folderKnown) || !exists(known) ||
+    if (exists(folderIni) || exists(folderUser) || exists(folderKnown) || exists(known) ||
         exists(folder + "ModActivator.log") || !exists(dataPath("ModActivator.log")) ||
         GetPrivateProfileIntA("General", "HookXInput", 1, old.c_str()) != 0 ||
-        readBindingType(probe) != 2 || moved.size() != 3)
+        readBindingType(probe) != 2 || moved.size() != 4)
       return 8;
     // An update brought fresh INIs into bin64 while the folder still has the
     // 1.3 ones: your options carry over, the shipped comments stay, your
@@ -628,6 +628,51 @@ ModActivatorEditorTest(const char *root, const char *file, const char *sec,
       snprintf(error, size, "%s", e.what());
     return 1;
   }
+}
+// The known-mods list built into the plugin, and a file beside it that only
+// adds: config files the built-in list lacks, and reserved keys. root is an
+// empty folder.
+extern "C" __declspec(dllexport) int ModActivatorKnownModsTest(const char *root) {
+  if (!folder.empty() || !root)
+    return -1;
+  folder = root;
+  const auto has = [](const KnownMods &mods, const char *file) {
+    return std::find_if(mods.begin(), mods.end(),
+                        [&](const KnownMod &m) { return m.file == file; });
+  };
+  const auto reserved = [](const KnownMods &mods, const char *label) {
+    for (const auto &m : mods)
+      for (const auto &[keys, who] : m.reserved)
+        if (who == label)
+          return true;
+    return false;
+  };
+  const int result = [&] {
+    const auto path = configPath("ModActivator.KnownMods.ini");
+    DeleteFileA(path.c_str());
+    // No file at all, as DMM installs it: the built-in list is all there.
+    auto mods = loadKnownMods();
+    auto route = has(mods, "crimsonroute.ini");
+    if (route == mods.end() || route->name != "Crimson Route" || !reserved(mods, "Steam: screenshot (default key)"))
+      return 1;
+    const auto count = mods.size();
+    // An older copy cannot replace a built-in entry; a new config file and a
+    // reserved key are added.
+    std::ofstream(path) << "[CrimsonRoute.ini]\n@mod = Stale name | old\n"
+                           "[TryOut.ini]\n@mod = Try Out | an entry being tried\nHotkey = menu | Menu | Opens it.\n"
+                           "[@reserved]\nF9 = Mine: overlay\n";
+    mods = loadKnownMods();
+    route = has(mods, "crimsonroute.ini");
+    const auto tryOut = has(mods, "tryout.ini");
+    if (route == mods.end() || route->name != "Crimson Route" || tryOut == mods.end() ||
+        tryOut->name != "Try Out" || tryOut->bindings.size() != 1 || mods.size() != count + 1 ||
+        !reserved(mods, "Mine: overlay") || !reserved(mods, "Steam: screenshot (default key)"))
+      return 2;
+    DeleteFileA(path.c_str());
+    return 0;
+  }();
+  folder.clear();
+  return result;
 }
 extern "C" __declspec(dllexport) int ModActivatorConflictTest() {
   return conflict({17, 119}, {119, 17}) == 2 &&
