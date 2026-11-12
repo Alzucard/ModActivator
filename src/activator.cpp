@@ -1862,40 +1862,76 @@ extern "C" __declspec(dllexport) int ModActivatorPreview(const char *path,
   catalog.clear();
   allBindings.clear();
   restartRequired.clear();
+  // A typical setup, as 1.3 shows it: names and descriptions from the
+  // known-mods list, controller buttons, several cards for one mod, and a
+  // conflict with Steam's screenshot key. Texts follow the shipped list.
+  enum Kind { menu, toggle, action };
   struct Sample {
-    const char *name;
-    const char *key;
-    int vk;
-    bool toggle;
+    const char *module, *modName, *section, *key;
+    std::vector<int> keys;
+    Kind kind;
+    const char *name, *description;
+    unsigned pad = 0;
   };
-  Sample samples[] = {
-      {"InstantSurgery.asi", "ActivationKeyVK", 33, false},
-      {"BodyPhysics.asi", "ActivationKeyVK", 115, false},
-      {"BloodLifetime20302.asi", "ActivationKeyVK", 113, false},
-      {"CrimsonRoute.asi", "ManageLocationsHotkey", 119, false},
-      {"CrimsonFastLoad.asi", "Hotkey", 116, false},
-      {"ModHub.asi", "ActivationKeyVK", 35, false},
-      {"CalmerDynamicWind.asi", "ToggleKey", 45, true},
-      {"CrimsonWeather.addon64", "HotkeyToggleEffect", 46, true}};
-  for (auto &sample : samples) {
-    Action a{std::filesystem::path(sample.name).stem().string() +
-                 " - General / " + sample.key,
-             sample.name,
-             std::string(sample.name) + ".ini",
-             "General",
-             sample.key,
-             sample.toggle};
-    a.cachedKeys = {sample.vk};
-    if (sample.vk == 113)
-      a.cachedKeys.insert(a.cachedKeys.begin(), 17);
-    a.cachedValue = std::to_string(sample.vk);
-    catalog.push_back(a);
+  constexpr unsigned ls = XINPUT_GAMEPAD_LEFT_THUMB, rs = XINPUT_GAMEPAD_RIGHT_THUMB;
+  const Sample samples[] = {
+      {"InstantSurgery.asi", "Instant Surgery", "General", "ActivationKeyVK", {VK_PRIOR}, menu,
+       "Body editor", "Opens the Instant Surgery body editor."},
+      {"CrimsonRoute.asi", "Crimson Route", "SettingsWindow", "ManageLocationsHotkey", {VK_F8}, menu,
+       "Settings window", "Opens Crimson Route's settings and saved locations.", ls | rs | XINPUT_GAMEPAD_A},
+      {"CrimsonRoute.asi", "Crimson Route", "AutoMove", "ToggleHotkey", {VK_F9}, toggle,
+       "Auto-move", "Starts or stops moving along the selected route.", ls | rs | XINPUT_GAMEPAD_X},
+      {"CrimsonRoute.asi", "Crimson Route", "AutoMove", "ModeHotkey", {VK_CONTROL, VK_F10}, action,
+       "Auto-move pace", "Cycles walking, running and sprinting while auto-moving.",
+       ls | rs | XINPUT_GAMEPAD_Y},
+      {"PrivateStorageAnywhere.asi", "Private Storage Anywhere", "Hotkeys", "PrivateHotkey", {VK_F4},
+       menu, "Private Storage", "Opens your Private Storage."},
+      {"PrivateStorageAnywhere.asi", "Private Storage Anywhere", "Hotkeys", "DresserHotkey", {VK_F6},
+       menu, "Dresser", "Opens the housing Dresser."},
+      {"CDWiki.asi", "Mount and Pet Wiki", "CDWiki", "ToggleKey", {VK_F7}, menu, "Wiki",
+       "Opens or closes the mount and pet wiki.", XINPUT_GAMEPAD_BACK | ls},
+      {"CrimsonFastLoad.asi", "Crimson FastLoad", "Menu", "Hotkey", {VK_F5}, menu, "FastLoad menu",
+       "Opens the Crimson FastLoad menu, where every feature has its own switch."},
+      // F3, not the mod's default ` key: a symbol key's label follows the
+      // keyboard layout of whoever renders the preview.
+      {"CombatEvolved.asi", "Combat Evolved", "CombatEvolved", "StanceCycleKey", {VK_F3}, action,
+       "Cycle stance", "Switches to the next fighting style: Kliff's, Damiane's or Oongka's.",
+       XINPUT_GAMEPAD_LEFT_SHOULDER | XINPUT_GAMEPAD_DPAD_DOWN},
+      {"CombatEvolved.asi", "Combat Evolved", "CombatEvolved", "StanceDamianeKey", {VK_CONTROL, '8'},
+       action, "Damiane's stance", "Switches straight to Damiane's fighting style."},
+      {"CalmerDynamicWind.asi", "Calmer Dynamic Wind", "Hotkeys", "ToggleKey", {VK_INSERT}, toggle,
+       "Calmer wind", "Switches between the calmer wind and the game's own, to compare."},
+      // The clash the mod's own config warns about: F12 is Steam's
+      // screenshot key.
+      {"CalmerDynamicWind.asi", "Calmer Dynamic Wind", "Hotkeys", "DisableKey", {VK_F12}, action,
+       "Disable until restart", "Turns the mod off until the game is restarted."},
+      {"CrimsonWeather.addon64", "Crimson Weather", "General", "HotkeyToggleEffect", {VK_DELETE},
+       toggle, "Weather effect", "Turns Crimson Weather's effect on or off."},
+      {"KC- Gilded Compass.asi", "Gilded Compass", "Menu", "MapHotkeyVk", {VK_CONTROL, VK_F8}, toggle,
+       "Minimap", "Hides or shows the minimap."},
+  };
+  for (const auto &sample : samples) {
+    const auto stem = std::filesystem::path(sample.module).stem().string();
+    Action a{stem + " - " + sample.section + " / " + sample.key, sample.module, stem + ".ini",
+             sample.section, sample.key, sample.kind == toggle};
+    a.cachedKeys = sample.keys;
+    a.cachedValue = shortcutLabel(sample.keys);
+    a.modName = sample.modName;
+    a.customName = sample.name;
+    a.description = sample.description;
+    a.descriptionSource = sourceKnownMods;
+    a.padButtons = sample.pad;
+    a.menuRank = sample.kind == menu ? 150 : 0;
+    a.featureRank = sample.kind == toggle ? 150 : 0;
+    a.chosenKind = true;
+    if (sample.kind != action)
+      catalog.push_back(a);
     allBindings.push_back(a);
   }
-  allBindings[3].severity = 1;
-  allBindings[3].overlapNames = "Another mod - Settings shortcut";
-  allBindings[4].severity = 2;
-  allBindings[4].overlapNames = "Another mod - Menu shortcut";
+  // The conflicts a refresh would find: Calmer Dynamic Wind's F12 is Steam's
+  // screenshot key, and Crimson Route's F8 overlaps Gilded Compass's Ctrl+F8.
+  std::vector<ReservedKey> reserved{{{VK_F12}, "Steam: screenshot (default key)"}};
+  markConflicts(allBindings, reserved);
   catalogChanged();
   ++layoutVersion;
   auto *ctx = ImGui::CreateContext();

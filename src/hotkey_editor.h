@@ -255,7 +255,7 @@ static const std::vector<Action> &bindingsSnapshot() {
       anyPadBinding |= a.padButtons != 0;
       const auto module = lower(a.module);
       const HMODULE handle = GetModuleHandleA(a.module.c_str());
-      if (handle && !restarts.count(module))
+      if ((handle || previewMode) && !restarts.count(module))
         sendTargets.ready.insert(module);
       if (handle && modHub && module != "modhub.asi" && GetProcAddress(handle, "ModHubMenuV1"))
         sendTargets.managed.insert(module);
@@ -310,12 +310,15 @@ static void drawHotkeys() {
       ++overlap;
   }
   ImGui::Spacing();
-  UI::badge((std::to_string(list.size()) + " bindings").c_str(), UI::muted);
+  const auto count = [](size_t n, const char *one, const char *many) {
+    return std::to_string(n) + " " + (n == 1 ? one : many);
+  };
+  UI::badge(count(list.size(), "binding", "bindings").c_str(), UI::muted);
   ImGui::SameLine();
-  UI::badge((std::to_string(exact) + " conflicts").c_str(),
+  UI::badge(count(exact, "conflict", "conflicts").c_str(),
             exact ? ImVec4(.95f, .43f, .40f, 1) : UI::muted);
   ImGui::SameLine();
-  UI::badge((std::to_string(overlap) + " possible overlaps").c_str(),
+  UI::badge(count(overlap, "possible overlap", "possible overlaps").c_str(),
             overlap ? UI::gold : UI::muted);
   ImGui::Spacing();
   ImGui::TextDisabled(

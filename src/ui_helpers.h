@@ -371,12 +371,30 @@ static void groupedBindings(const std::vector<Action> &actions, DrawRow drawRow,
     ImGui::PushID(module.c_str());
     ImGui::TableNextRow();
     ImGui::TableSetColumnIndex(0);
-    const auto title = name(*bindings.front()) + " (" + std::to_string(bindings.size()) +
-                       (search[0] ? ")###SearchGroup" : ")###ModGroup");
+    const auto title = name(*bindings.front()) + " (" + std::to_string(bindings.size()) + ")";
     auto flags = ImGuiTreeNodeFlags_CollapsingHeader | ImGuiTreeNodeFlags_SpanAllColumns;
-    if (search[0])
+    if (search[0] || previewMode) // previews show the groups open
       flags |= ImGuiTreeNodeFlags_DefaultOpen;
-    const bool open = ImGui::TreeNodeEx(title.c_str(), flags);
+    // The header spans the row, but Dear ImGui 1.91 clips its label to the
+    // first column ("Mount and Pet W"). So the node gets no label, and the
+    // title is drawn across the whole row where the label would be.
+    const bool open = ImGui::TreeNodeEx(search[0] ? "###SearchGroup" : "###ModGroup", flags);
+    {
+      const auto min = ImGui::GetItemRectMin(), max = ImGui::GetItemRectMax();
+      const auto &style = ImGui::GetStyle();
+      auto *draw = ImGui::GetWindowDrawList();
+      // Clipped to the row, and to the table's scrolling rows, so a header
+      // half scrolled out of view does not draw outside the table or over
+      // its frozen column headers.
+      ImRect clip(min, max);
+      if (const ImGuiTable *table = ImGui::GetCurrentTable())
+        clip.ClipWithFull(table->Bg2ClipRectForDrawCmd);
+      draw->PushClipRect(clip.Min, clip.Max, false);
+      draw->AddText(ImVec2(min.x + ImGui::GetFontSize() + style.FramePadding.x * 3,
+                           min.y + style.FramePadding.y),
+                    ImGui::GetColorU32(ImGuiCol_Text), title.c_str());
+      draw->PopClipRect();
+    }
     if (const auto &about = bindings.front()->modAbout; !about.empty() && ImGui::IsItemHovered()) {
       ImGui::BeginTooltip();
       ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 360 * scale);
