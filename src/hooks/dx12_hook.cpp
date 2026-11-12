@@ -149,6 +149,10 @@ namespace ml::hooks
     static bool                       g_presentQueuePinned = false;
     static ID3D12Fence*               g_fence          = nullptr;
     static HANDLE                     g_fenceEvent     = nullptr;
+    // DrawOverlay's own, for waiting on one back buffer's work. Not shared
+    // with g_fenceEvent, which WaitForOverlayIdle sets from other threads:
+    // one auto-reset event for two waiters can wake the wrong one.
+    static HANDLE                     g_frameFenceEvent = nullptr;
     static UINT64                     g_fenceValue     = 0;
     static std::vector<FrameContext>  g_frames;
     static UINT                       g_bufferCount    = 0;
@@ -657,7 +661,8 @@ namespace ml::hooks
             return false;
         }
         g_fenceEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-        if (!g_fenceEvent)
+        g_frameFenceEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        if (!g_fenceEvent || !g_frameFenceEvent)
         {
             LOG_ERR("InitImGui: fence event creation failed.");
             return false;
@@ -886,11 +891,11 @@ namespace ml::hooks
         // fraction of a millisecond away. Only after 100 ms is the frame
         // given up, so a stuck GPU cannot hold the game.
         auto completed = g_fence->GetCompletedValue();
-        if (completed != UINT64_MAX && completed < frame.fenceValue && g_fenceEvent &&
-            SUCCEEDED(g_fence->SetEventOnCompletion(frame.fenceValue, g_fenceEvent)))
+        if (completed != UINT64_MAX && completed < frame.fenceValue &&
+            SUCCEEDED(g_fence->SetEventOnCompletion(frame.fenceValue, g_frameFenceEvent)))
         {
             g_frameStats.gpuWaits.fetch_add(1, std::memory_order_relaxed);
-            WaitForSingleObject(g_fenceEvent, 100);
+            WaitForSingleObject(g_frameFenceEvent, 100);
             completed = g_fence->GetCompletedValue();
         }
         if (completed < frame.fenceValue || completed == UINT64_MAX ||
@@ -984,10 +989,11 @@ namespace ml::hooks
     // A menu that blinks is drawn on some presented frames and not on others,
     // or opens and closes by itself. Neither showed in the log, so for 20
     // seconds after each opening a line a second says how many frames came
-    // through, how many the menu was drawn on, and why the others were not.
-    // At most 120 such lines a session. The frame generation libraries loaded
-    // are written at each opening when they changed, since frame generation
-    // presenting frames this mod never sees is the other way to blink.
+    // through, how many the menu was drawn on, why the others were not, and
+    // how often the GPU had to be waited for. At most 120 such lines a
+    // session. The frame generation libraries loaded are written at each
+    // opening when they changed. These lines found the blinking under DLSS
+    // frame generation (see DrawOverlay).
 
     // Counted by the ReShade path, which refuses other windows before
     // RenderOverlay is reached.
@@ -998,7 +1004,7 @@ namespace ml::hooks
         static const char* const kModules[] = {
             "sl.interposer.dll", "sl.dlss_g.dll", "nvngx_dlssg.dll",
             "amd_fidelityfx_loader_dx12.dll", "amd_fidelityfx_framegeneration_dx12.dll",
-            "libxess_fg.dll", "OptiScaler.dll", "nvngx.dll" };
+            "libxess_fg.dll" };
         std::string loaded;
         for (const char* m : kModules)
             if (GetModuleHandleA(m))
@@ -1018,18 +1024,25 @@ namespace ml::hooks
         static DWORD s_until = 0, s_last = 0;
         static unsigned s_lines = 0;
         const DWORD now = GetTickCount();
+        auto& f = g_frameStats;
+        const auto take = [](std::atomic<unsigned>& n) { return n.exchange(0, std::memory_order_relaxed); };
         if (open && !s_wasOpen)
         {
             LogFrameGenerationModules();
             if (!s_until)
+            {
+                // A fresh window: what was counted while nothing reported
+                // belongs to no line.
+                for (auto* n : { &f.presents, &f.notGameWindow, &f.notGameFacing, &f.busy, &f.closed,
+                                 &f.drawn, &f.notDrawn, &f.chainSwitches, &f.threadSwitches, &f.gpuWaits })
+                    take(*n);
                 s_last = now;
+            }
             s_until = now + 20000;
         }
         s_wasOpen = open;
         if (!s_until || static_cast<LONG>(now - s_last) < 1000)
             return;
-        auto& f = g_frameStats;
-        const auto take = [](std::atomic<unsigned>& n) { return n.exchange(0, std::memory_order_relaxed); };
         const unsigned presents = take(f.presents), notGameWindow = take(f.notGameWindow),
                        notGameFacing = take(f.notGameFacing), busy = take(f.busy),
                        closed = take(f.closed), drawn = take(f.drawn), notDrawn = take(f.notDrawn),
@@ -1053,30 +1066,27 @@ namespace ml::hooks
     // Returns whether a frame was actually submitted (for the post-present device
     // check). isGameFacing is false for native presents while a wrapper owns the
     // drawing - those are Streamline's read-only finished frames, left untouched.
-    static bool RenderOverlayFrameInner(IDXGISwapChain3* swapChain, bool isGameFacing, UINT flags,
-                              ID3D12CommandQueue* presentQueue);
     static bool RenderOverlayFrame(IDXGISwapChain3* swapChain, bool isGameFacing, UINT flags,
                               ID3D12CommandQueue* presentQueue = nullptr)
-    {
-        auto& f = g_frameStats;
-        f.presents.fetch_add(1, std::memory_order_relaxed);
-        static IDXGISwapChain3* s_chain = nullptr;
-        static DWORD s_thread = 0;
-        if (s_chain && s_chain != swapChain)
-            f.chainSwitches.fetch_add(1, std::memory_order_relaxed);
-        if (s_thread && s_thread != GetCurrentThreadId())
-            f.threadSwitches.fetch_add(1, std::memory_order_relaxed);
-        s_chain = swapChain;
-        s_thread = GetCurrentThreadId();
-        return RenderOverlayFrameInner(swapChain, isGameFacing, flags, presentQueue);
-    }
-    static bool RenderOverlayFrameInner(IDXGISwapChain3* swapChain, bool isGameFacing, UINT flags,
-                              ID3D12CommandQueue* presentQueue)
     {
         // Counted before anything can refuse: every path that could draw comes
         // through here, so this is the one number that says whether this mod is
         // on the screen at all. OverlayBlindWatch reads it.
         g_presentSeen.fetch_add(1, std::memory_order_relaxed);
+
+        // For the [frames] lines. RenderOverlay lets one call in at a time,
+        // so the two remembered values need no lock.
+        auto& f = g_frameStats;
+        f.presents.fetch_add(1, std::memory_order_relaxed);
+        static IDXGISwapChain3* s_chain = nullptr;
+        static DWORD s_thread = 0;
+        const DWORD thread = GetCurrentThreadId();
+        if (s_chain && s_chain != swapChain)
+            f.chainSwitches.fetch_add(1, std::memory_order_relaxed);
+        if (s_thread && s_thread != thread)
+            f.threadSwitches.fetch_add(1, std::memory_order_relaxed);
+        s_chain = swapChain;
+        s_thread = thread;
 
         if (!isGameFacing || (flags & DXGI_PRESENT_TEST))
         {
@@ -2272,7 +2282,7 @@ namespace ml::hooks
             if (s_stack)
                 LOG("[hook] so WrapSwapChain does not apply: the menu draws on the finished frames%s.",
                     GetModuleHandleA("sl.interposer.dll")
-                        ? ", and Streamline (DLSS frame generation) is loaded, so with frame generation on the menu may not show or may blink"
+                        ? ", and Streamline (DLSS frame generation) is loaded. Should the menu not show with frame generation on, that is why"
                         : "; Streamline (DLSS frame generation) is not loaded");
         }
         if (ppSwapChain && *ppSwapChain)

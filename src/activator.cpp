@@ -55,6 +55,15 @@ static int wrapValue(const char *text) {
     return 0;
   return -1;
 }
+// WrapSwapChain from the settings file (see wrapValue above). Auto, the default,
+// leaves it to the swapchain hook, which wraps when DLSS frame generation's
+// Streamline layer is loaded: there the present hook draws on frames the
+// menu cannot appear on.
+static int wrapSetting(const std::string &config) {
+  char value[64]{};
+  GetPrivateProfileStringA("General", "WrapSwapChain", "auto", value, sizeof value, config.c_str());
+  return wrapValue(value);
+}
 static constexpr char dataFolderName[] = "ModActivator";
 static std::string dataPath(const char *name) {
   return folder + dataFolderName + "\\" + name;
@@ -771,15 +780,15 @@ static void readController(bool menuOpen) {
 // written, then every 50th with the count.
 static void logToggle(bool opened, const char *cause, unsigned buttons = 0) {
   static unsigned count = 0;
-  ++count;
-  if (count > 40 && count % 50)
+  if (++count > 40 && count % 50)
     return;
+  char held[40] = "";
   if (buttons)
-    LOG("[menu] %s by %s (buttons held 0x%X)%s", opened ? "opened" : "closed", cause, buttons,
-        count > 40 ? (" - toggle " + std::to_string(count) + " this session").c_str() : "");
-  else
-    LOG("[menu] %s by %s%s", opened ? "opened" : "closed", cause,
-        count > 40 ? (" - toggle " + std::to_string(count) + " this session").c_str() : "");
+    snprintf(held, sizeof held, " (buttons held 0x%X)", buttons);
+  char nth[48] = "";
+  if (count > 40)
+    snprintf(nth, sizeof nth, " - toggle %u this session", count);
+  LOG("[menu] %s by %s%s%s", opened ? "opened" : "closed", cause, held, nth);
 }
 void PollToggle() {
   static bool was = false;
@@ -1161,15 +1170,6 @@ static std::string ansiFolder(const std::wstring &wide) {
   if (!result.empty() && result.back() != '\\' && result.back() != '/')
     result += '\\';
   return result;
-}
-// WrapSwapChain from the settings file (see wrapValue). Auto, the default,
-// leaves it to the swapchain hook, which wraps when DLSS frame generation's
-// Streamline layer is loaded: there the present hook draws on frames the
-// menu cannot appear on.
-static int wrapSetting(const std::string &config) {
-  char value[64]{};
-  GetPrivateProfileStringA("General", "WrapSwapChain", "auto", value, sizeof value, config.c_str());
-  return wrapValue(value);
 }
 static DWORD WINAPI start(void *arg) {
   char p[MAX_PATH];
