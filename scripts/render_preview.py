@@ -60,14 +60,18 @@ for tab, name in [(0, 'mod-menus'), (1, 'toggles'), (2, 'hotkeys'), (65536, 'set
     png(out / f'{name}.png', x1 - x0, y1 - y0, rows)
     print(f'{out / name}.png  {x1 - x0}x{y1 - y0}')
 
-# The Nexus thumbnail: the whole 1280 x 720 scene, not cropped.
-thumb = m.ModActivatorThumbnail
-thumb.argtypes = [ctypes.c_char_p, ctypes.c_int]
-data, pixels = build / 'preview-thumbnail.bin', build / 'preview-thumbnail.rgba'
-result = thumb(str(data).encode(), 0)
-assert result == 0, f'thumbnail failed with {result}'
-subprocess.run([str(renderer), str(data), str(pixels), '1280', '720'], check=True,
-               capture_output=True)
-rgba = pixels.read_bytes()
-png(out / 'thumbnail.png', 1280, 720, [rgba[y * 1280 * 4:(y + 1) * 1280 * 4] for y in range(720)])
-print(f'{out / "thumbnail.png"}  1280x720')
+# The Nexus images, whole scenes, not cropped: the thumbnail (16:9, the Mod
+# menus tab) and the header banner (4:1, the Hotkeys tab).
+for export, name, tab, width, height in [('ModActivatorThumbnail', 'thumbnail', 0, 1280, 720),
+                                         ('ModActivatorHeader', 'header', 2, 1920, 480)]:
+    draw = getattr(m, export)
+    draw.argtypes = [ctypes.c_char_p, ctypes.c_int]
+    data, pixels = build / f'preview-{name}.bin', build / f'preview-{name}.rgba'
+    result = draw(str(data).encode(), tab)
+    assert result == 0, f'{name} failed with {result}'
+    subprocess.run([str(renderer), str(data), str(pixels), str(width), str(height)], check=True,
+                   capture_output=True)
+    rgba = pixels.read_bytes()
+    png(out / f'{name}.png', width, height,
+        [rgba[y * width * 4:(y + 1) * width * 4] for y in range(height)])
+    print(f'{out / name}.png  {width}x{height}')

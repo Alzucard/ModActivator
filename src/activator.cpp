@@ -1852,8 +1852,9 @@ extern "C" __declspec(dllexport) int ModActivatorResponsivenessTest() {
   return reads ? 3 : 0;
 }
 
-// Set by ModActivatorThumbnail for one ModActivatorPreview call.
-static bool thumbnailMode = false;
+// Set by ModActivatorThumbnail (1) and ModActivatorHeader (2) for one
+// ModActivatorPreview call: which Nexus image to draw around the panel.
+static int sceneMode = 0;
 extern "C" __declspec(dllexport) int ModActivatorPreview(const char *path,
                                                          int tab) {
   if (!folder.empty())
@@ -1938,10 +1939,27 @@ extern "C" __declspec(dllexport) int ModActivatorPreview(const char *path,
   ++layoutVersion;
   auto *ctx = ImGui::CreateContext();
   auto &io = ImGui::GetIO();
-  // The Nexus thumbnail is a 16:9 scene: the name and what it does on the
-  // left, large enough to read on a small tile, and the panel on the right.
-  const bool thumbnail = thumbnailMode;
-  io.DisplaySize = thumbnail ? ImVec2(1280, 720) : ImVec2(1000, 860);
+  // The Nexus images are scenes: the name and what it does on the left, large
+  // enough to read when shrunk, and the panel on the right. The thumbnail is
+  // 16:9; the header banner is 4:1, with the panel running off its bottom
+  // edge and fading out.
+  struct Scene {
+    ImVec2 display;
+    float left, titleY, titleMax, titleSize, ruleY;
+    std::vector<const char *> tagline;
+    float taglineY, taglineSize, featureY, featureSize, footY;
+    ImVec2 glow;
+    bool fade;
+  };
+  const Scene scenes[] = {
+      {{1280, 720}, 64, 168, 470, 92, 290, {"Every mod's menu, toggle", "and hotkey in one panel"},
+       322, 34, 448, 26, 624, {260, 470}, false},
+      {{1920, 480}, 120, 92, 900, 124, 238, {"Every mod's menu, toggle and hotkey in one panel"},
+       266, 40, 336, 30, 0, {420, 300}, true},
+  };
+  const bool thumbnail = sceneMode != 0;
+  const Scene &scene = scenes[thumbnail ? sceneMode - 1 : 0];
+  io.DisplaySize = thumbnail ? scene.display : ImVec2(1000, 860);
   io.DeltaTime = 1.0f / 60;
   io.IniFilename = nullptr;
   ml::gui::InitStyle(thumbnail ? 0.86f : 1.0f);
@@ -1956,8 +1974,8 @@ extern "C" __declspec(dllexport) int ModActivatorPreview(const char *path,
                  ? nullptr
                  : io.Fonts->AddFontFromFileTTF(utf8.c_str(), size);
     };
-    titleFont = font(L"segoeuib.ttf", 92.0f);
-    textFont = font(L"segoeui.ttf", 34.0f);
+    titleFont = font(L"segoeuib.ttf", scene.titleSize);
+    textFont = font(L"segoeui.ttf", scene.taglineSize);
     if (!titleFont || !textFont)
       titleFont = textFont = io.Fonts->Fonts[0];
   }
@@ -1977,29 +1995,47 @@ extern "C" __declspec(dllexport) int ModActivatorPreview(const char *path,
                                   IM_COL32(34, 14, 16, 255));
       // Many faint layers, so the glow fades without visible rings.
       for (int r = 48; r >= 1; --r)
-        bg->AddCircleFilled(ImVec2(260, 470), r * 10.5f, IM_COL32(150, 26, 30, 2), 96);
+        bg->AddCircleFilled(scene.glow, r * 10.5f, IM_COL32(150, 26, 30, 2), 96);
       const ImU32 gold = IM_COL32(214, 176, 110, 255), light = IM_COL32(232, 228, 220, 255),
                   muted = IM_COL32(150, 148, 150, 255);
-      const float left = 64;
-      // The name, as large as fits beside the panel.
-      float titleSize = 92.0f;
-      while (titleSize > 40 && titleFont->CalcTextSizeA(titleSize, FLT_MAX, 0, "ModActivator").x > 470)
-        titleSize -= 2;
-      bg->AddText(titleFont, titleSize, ImVec2(left, 168), gold, "ModActivator");
-      bg->AddRectFilled(ImVec2(left + 4, 290), ImVec2(left + 124, 294), gold);
-      const char *lines[] = {"Every mod's menu, toggle", "and hotkey in one panel"};
-      for (int l = 0; l < 2; ++l)
-        bg->AddText(textFont, 34.0f, ImVec2(left, 322 + l * 44.0f), light, lines[l]);
+      const float left = scene.left;
+      // Text as large as fits beside the panel.
+      const auto fit = [&](ImFont *font, float size, const char *text) {
+        while (size > 14 && font->CalcTextSizeA(size, FLT_MAX, 0, text).x > scene.titleMax)
+          size -= 1;
+        return size;
+      };
+      bg->AddText(titleFont, fit(titleFont, scene.titleSize, "ModActivator"),
+                  ImVec2(left, scene.titleY), gold, "ModActivator");
+      bg->AddRectFilled(ImVec2(left + 4, scene.ruleY), ImVec2(left + 124, scene.ruleY + 4), gold);
+      for (size_t l = 0; l < scene.tagline.size(); ++l)
+        bg->AddText(textFont, fit(textFont, scene.taglineSize, scene.tagline[l]),
+                    ImVec2(left, scene.taglineY + l * scene.taglineSize * 1.3f), light, scene.tagline[l]);
       const char *features = "Keyboard  \xc2\xb7  Controller  \xc2\xb7  Conflict checks";
-      float featureSize = 26.0f;
-      while (featureSize > 16 && textFont->CalcTextSizeA(featureSize, FLT_MAX, 0, features).x > 470)
-        featureSize -= 1;
-      bg->AddText(textFont, featureSize, ImVec2(left, 448), muted, features);
-      // No version: the thumbnail outlives releases; the panel shows it.
-      bg->AddText(textFont, 24.0f, ImVec2(left, 624), muted, "For Crimson Desert");
-      ImGui::SetNextWindowPos(ImVec2(size.x - 24 - 820 * UI::scale, (size.y - 740 * UI::scale) * 0.5f));
+      bg->AddText(textFont, fit(textFont, scene.featureSize, features), ImVec2(left, scene.featureY),
+                  muted, features);
+      // No version: the images outlive releases; the panel shows it.
+      if (scene.footY > 0)
+        bg->AddText(textFont, 24.0f, ImVec2(left, scene.footY), muted, "For Crimson Desert");
+      const ImVec2 panel(820 * UI::scale, 740 * UI::scale);
+      ImGui::SetNextWindowPos(scene.fade ? ImVec2(size.x - left - panel.x, 56)
+                                         : ImVec2(size.x - 24 - panel.x, (size.y - panel.y) * 0.5f));
     }
     ml::gui::Render();
+    // A panel that runs off the bottom fades into the backdrop over its last
+    // third, drawn above it.
+    if (thumbnail && scene.fade) {
+      // Over the panel only, so the words beside it stay.
+      // Fully faded a little before the edge, so nothing shows through at
+      // the bottom.
+      const ImVec2 size = io.DisplaySize;
+      const float panelLeft = size.x - scene.left - 820 * UI::scale - 16;
+      const ImU32 clear = IM_COL32(34, 14, 16, 0), solid = IM_COL32(34, 14, 16, 255);
+      auto *fg = ImGui::GetForegroundDrawList();
+      fg->AddRectFilledMultiColor(ImVec2(panelLeft, size.y * 0.58f), ImVec2(size.x, size.y * 0.9f),
+                                  clear, clear, solid, solid);
+      fg->AddRectFilled(ImVec2(panelLeft, size.y * 0.9f), size, solid);
+    }
     ImGui::Render();
   }
   auto *d = ImGui::GetDrawData();
@@ -2037,9 +2073,17 @@ extern "C" __declspec(dllexport) int ModActivatorPreview(const char *path,
 // The Nexus thumbnail (1280 x 720): ModActivatorPreview's samples on the
 // given tab, beside the name and a line about what the mod does.
 extern "C" __declspec(dllexport) int ModActivatorThumbnail(const char *path, int tab) {
-  thumbnailMode = true;
+  sceneMode = 1;
   const int result = ModActivatorPreview(path, tab);
-  thumbnailMode = false;
+  sceneMode = 0;
+  return result;
+}
+// The Nexus header banner (1920 x 480): the same, wide, with the panel on
+// the given tab running off the bottom.
+extern "C" __declspec(dllexport) int ModActivatorHeader(const char *path, int tab) {
+  sceneMode = 2;
+  const int result = ModActivatorPreview(path, tab);
+  sceneMode = 0;
   return result;
 }
 
