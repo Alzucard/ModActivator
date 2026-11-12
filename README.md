@@ -1,4 +1,4 @@
-# ModActivator 1.3.4
+# ModActivator 1.3.5
 
 An in-game mod menu and hotkey manager for Crimson Desert.
 
