@@ -1852,6 +1852,8 @@ extern "C" __declspec(dllexport) int ModActivatorResponsivenessTest() {
   return reads ? 3 : 0;
 }
 
+// Set by ModActivatorThumbnail for one ModActivatorPreview call.
+static bool thumbnailMode = false;
 extern "C" __declspec(dllexport) int ModActivatorPreview(const char *path,
                                                          int tab) {
   if (!folder.empty())
@@ -1936,16 +1938,67 @@ extern "C" __declspec(dllexport) int ModActivatorPreview(const char *path,
   ++layoutVersion;
   auto *ctx = ImGui::CreateContext();
   auto &io = ImGui::GetIO();
-  io.DisplaySize = ImVec2(1000, 860);
+  // The Nexus thumbnail is a 16:9 scene: the name and what it does on the
+  // left, large enough to read on a small tile, and the panel on the right.
+  const bool thumbnail = thumbnailMode;
+  io.DisplaySize = thumbnail ? ImVec2(1280, 720) : ImVec2(1000, 860);
   io.DeltaTime = 1.0f / 60;
   io.IniFilename = nullptr;
-  ml::gui::InitStyle(1.0f);
+  ml::gui::InitStyle(thumbnail ? 0.86f : 1.0f);
+  ImFont *titleFont = nullptr, *textFont = nullptr;
+  if (thumbnail) {
+    wchar_t windows[MAX_PATH]{};
+    GetWindowsDirectoryW(windows, MAX_PATH);
+    const auto font = [&](const wchar_t *file, float size) -> ImFont * {
+      const std::wstring path = std::wstring(windows) + L"\\Fonts\\" + file;
+      const auto utf8 = narrowText(path.c_str(), (int)path.size(), CP_UTF8);
+      return GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES
+                 ? nullptr
+                 : io.Fonts->AddFontFromFileTTF(utf8.c_str(), size);
+    };
+    titleFont = font(L"segoeuib.ttf", 92.0f);
+    textFont = font(L"segoeui.ttf", 34.0f);
+    if (!titleFont || !textFont)
+      titleFont = textFont = io.Fonts->Fonts[0];
+  }
   unsigned char *pixels;
   int w, h;
   io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
   io.Fonts->SetTexID((ImTextureID)1);
   for (int i = 0; i < 4; ++i) {
     ImGui::NewFrame();
+    if (thumbnail) {
+      auto *bg = ImGui::GetBackgroundDrawList();
+      const ImVec2 size = io.DisplaySize;
+      // Night over the desert: dark, warmer towards the bottom, with a
+      // crimson glow behind the words.
+      bg->AddRectFilledMultiColor(ImVec2(0, 0), size, IM_COL32(20, 17, 22, 255),
+                                  IM_COL32(20, 17, 22, 255), IM_COL32(34, 14, 16, 255),
+                                  IM_COL32(34, 14, 16, 255));
+      // Many faint layers, so the glow fades without visible rings.
+      for (int r = 48; r >= 1; --r)
+        bg->AddCircleFilled(ImVec2(260, 470), r * 10.5f, IM_COL32(150, 26, 30, 2), 96);
+      const ImU32 gold = IM_COL32(214, 176, 110, 255), light = IM_COL32(232, 228, 220, 255),
+                  muted = IM_COL32(150, 148, 150, 255);
+      const float left = 64;
+      // The name, as large as fits beside the panel.
+      float titleSize = 92.0f;
+      while (titleSize > 40 && titleFont->CalcTextSizeA(titleSize, FLT_MAX, 0, "ModActivator").x > 470)
+        titleSize -= 2;
+      bg->AddText(titleFont, titleSize, ImVec2(left, 168), gold, "ModActivator");
+      bg->AddRectFilled(ImVec2(left + 4, 290), ImVec2(left + 124, 294), gold);
+      const char *lines[] = {"Every mod's menu, toggle", "and hotkey in one panel"};
+      for (int l = 0; l < 2; ++l)
+        bg->AddText(textFont, 34.0f, ImVec2(left, 322 + l * 44.0f), light, lines[l]);
+      const char *features = "Keyboard  \xc2\xb7  Controller  \xc2\xb7  Conflict checks";
+      float featureSize = 26.0f;
+      while (featureSize > 16 && textFont->CalcTextSizeA(featureSize, FLT_MAX, 0, features).x > 470)
+        featureSize -= 1;
+      bg->AddText(textFont, featureSize, ImVec2(left, 448), muted, features);
+      // No version: the thumbnail outlives releases; the panel shows it.
+      bg->AddText(textFont, 24.0f, ImVec2(left, 624), muted, "For Crimson Desert");
+      ImGui::SetNextWindowPos(ImVec2(size.x - 24 - 820 * UI::scale, (size.y - 740 * UI::scale) * 0.5f));
+    }
     ml::gui::Render();
     ImGui::Render();
   }
@@ -1980,6 +2033,14 @@ extern "C" __declspec(dllexport) int ModActivatorPreview(const char *path,
   ImGui::DestroyContext(ctx);
   previewMode = false;
   return 0;
+}
+// The Nexus thumbnail (1280 x 720): ModActivatorPreview's samples on the
+// given tab, beside the name and a line about what the mod does.
+extern "C" __declspec(dllexport) int ModActivatorThumbnail(const char *path, int tab) {
+  thumbnailMode = true;
+  const int result = ModActivatorPreview(path, tab);
+  thumbnailMode = false;
+  return result;
 }
 
 extern "C" __declspec(dllexport) int ModActivatorUISearchTest(){if(!folder.empty())return -1;Action a{"BodyPhysics","BodyPhysics.asi","","",""};a.cachedKeys={115};a.cachedValue="115";std::string old=UI::search;strcpy(UI::search,"f4");bool key=UI::matches(a);strcpy(UI::search,"body physics");bool name=UI::matches(a);strcpy(UI::search,"not present");bool negative=!UI::matches(a);strcpy(UI::search,old.c_str());return key&&name&&negative?0:1;}
