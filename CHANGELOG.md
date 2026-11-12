@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.3.4
 - Fix the menu blinking with DLSS frame generation, with or without ReShade: when the GPU had not yet finished the menu's work from a frame or two earlier, the menu was left out of that frame, which with frame generation happened on up to half the frames. It now waits for that work (at most 100 ms) and draws the menu on every frame.
 - `WrapSwapChain` defaults to `auto`, which draws the menu before DLSS frame generation whenever the game loads NVIDIA's Streamline, so nobody needs to edit it for frame generation. `1` and `0` still force it on or off, and `1` now also wins when another mod (such as AmbientMixer) hooked Present first. Crimson Route, which breaks with the wrapper, still prevents it. Should the wrapper turn down the game's swapchain, ModActivator falls back to drawing on the finished frames rather than not at all.
 - An update from 1.3 does not carry over its shipped `WrapSwapChain=0`. The value is read as before (`1 ; note` is still 1), and `true`/`false`, `on`/`off` work too.
