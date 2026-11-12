@@ -18,7 +18,7 @@ The panel uses a charcoal-and-gold theme with larger text, searchable mod cards,
 
 ## Install
 
-Close Crimson Desert. Copy `ModActivator.asi` and the `ModActivator` folder into the game's `bin64` folder, beside `CrimsonDesert.exe`. An ASI loader is required.
+Close Crimson Desert. Extract `ModActivator-<version>.zip` into the game's folder (the one that holds `bin64`), or install it with a mod manager such as DMM. That puts `ModActivator.asi` and the `ModActivator` folder in `bin64`, beside `CrimsonDesert.exe`. An ASI loader is required.
 
 ```
 bin64\
@@ -57,7 +57,7 @@ Each binding's name and description come from the most trustworthy source that h
 
 Without any of these, the name is worked out from the setting's key, such as `StanceCycleKey` → "Stance Cycle". A source that says whether a shortcut opens a menu, toggles something or is a plain action also decides its tab, unless you chose **Show as** yourself.
 
-**For mod authors:** export one function, `ModActivatorBindingsV1`, and ModActivator shows your names, descriptions and tabs for your shortcuts. `include/ModActivatorBindings.h` has the whole interface and an example. It needs nothing else, and your mod works the same without ModActivator.
+**For mod authors:** `ModActivator-<version>-ModderKit.zip` (and `docs/MODDERS.md` here) explains how ModActivator finds, names and sorts your shortcuts, how to export `ModActivatorBindingsV1` so it shows your own names and descriptions (`include/ModActivatorBindings.h`), and how to get into the known-mods list, with a small example mod that does all of it. Your mod works the same without ModActivator.
 
 ## Hotkey edits
 

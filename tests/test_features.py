@@ -89,6 +89,29 @@ assert both['severity'] == 1 and 'ModActivator (controller)' in both['who'], bot
 assert rows['Weather.ini', 'General', 'HotkeyToggleEffect']['severity'] == 0
 print("PASS: controller combinations that press each other, or ModActivator's, are overlaps.")
 
+# The modder kit's example mod, built by scripts/build.py: loaded as the game
+# would, with its own ExampleMod.ini, it is named, described and sorted by its
+# export, and its controller buttons are found beside its key.
+kit = root / 'kit'
+(kit / 'ModActivator').mkdir(parents=True)
+shutil.copy2('examples/ExampleMod/ExampleMod.ini', kit / 'ExampleMod.ini')
+example = ctypes.WinDLL(str(pathlib.Path('build/ExampleMod.asi').resolve()))
+describe = m.ModActivatorDescribeTest
+describe.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int]
+out = ctypes.create_string_buffer(100000)
+assert describe((str(kit) + '\\').encode(), b'ExampleMod.asi', out, len(out)) >= 0
+seen = {tuple(l.split('|')[1:3]): l.split('|') for l in out.value.decode('utf-8').splitlines()}
+menu, effect = seen['Menu', 'MenuKey'], seen['Effect', 'ToggleKey']
+assert menu[3] == '17,118,' and menu[4] == 'Example window' and menu[6] == '4' and menu[7] == '150', menu
+assert effect[4] == 'Example effect' and effect[6] == '4' and effect[8] == '150', effect
+assert effect[9] == 'Turns the example effect on or off.', effect
+out = ctypes.create_string_buffer(100000)
+assert fn((str(kit) + '\\').encode(), b'ExampleMod.asi', out, len(out)) >= 0
+text = out.value.decode('utf-8')
+assert 'card|ExampleMod.ini|Menu|MenuKey' in text and 'card|ExampleMod.ini|Effect|ToggleKey' in text
+assert 'binding|ExampleMod.ini|Effect|ToggleKey|0||LB + Down' in text, text
+print("PASS: the modder kit's example mod is read through its export and its config file.")
+
 ctl = m.ModActivatorControllerTest
 ctl.argtypes = [ctypes.c_char_p]
 tmp = root / 'controller'

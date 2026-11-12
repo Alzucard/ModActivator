@@ -10,6 +10,7 @@ import concurrent.futures
 import os
 import shutil
 import subprocess
+import zipfile
 
 base = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser()
@@ -98,3 +99,30 @@ shutil.copy2(base / 'include/ModActivatorBindings.h', data / 'include/ModActivat
 for name in ['README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'CHANGELOG.md']:
     shutil.copy2(base / name, data / name)
 shutil.copytree(base / 'licenses', data / 'licenses')
+
+# The example mod from the modder kit, built so the kit is known to compile;
+# tests/test_features.py loads it to check that ModActivator reads its export.
+example = base / 'examples/ExampleMod'
+subprocess.run([str(tc / 'x86_64-w64-mingw32-clang++.exe'), '-shared', '-static', '-O2',
+                '-std=c++17', '-I', str(base / 'include'), '-o', str(obj / 'ExampleMod.asi'),
+                str(example / 'ExampleMod.cpp'), '-luser32'], check=True)
+print('Built ' + str(obj / 'ExampleMod.asi'))
+
+# The two release archives, named for VERSION.
+#   ModActivator-<version>.zip            the mod, laid out from the game folder
+#                                         (bin64\...), as users and DMM install it
+#   ModActivator-<version>-ModderKit.zip  for mod authors: the export header,
+#                                         the guide and the example mod
+version = (base / 'VERSION').read_text(encoding='utf-8').strip()
+with zipfile.ZipFile(out / f'ModActivator-{version}.zip', 'w', zipfile.ZIP_DEFLATED) as z:
+    z.write(out / 'ModActivator.asi', 'bin64/ModActivator.asi')
+    for path in sorted(p for p in data.rglob('*') if p.is_file()):
+        z.write(path, 'bin64/ModActivator/' + path.relative_to(data).as_posix())
+with zipfile.ZipFile(out / f'ModActivator-{version}-ModderKit.zip', 'w', zipfile.ZIP_DEFLATED) as z:
+    z.write(base / 'docs/MODDERS.md', 'README.md')
+    z.write(base / 'include/ModActivatorBindings.h', 'include/ModActivatorBindings.h')
+    for name in ['ExampleMod.cpp', 'ExampleMod.ini']:
+        z.write(example / name, 'examples/ExampleMod/' + name)
+    z.write(base / 'data/ModActivator.KnownMods.ini', 'reference/ModActivator.KnownMods.ini')
+    z.write(base / 'LICENSE', 'LICENSE')
+print(f'Packed dist/ModActivator-{version}.zip and dist/ModActivator-{version}-ModderKit.zip')
