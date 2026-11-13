@@ -11,6 +11,7 @@ The panel uses a charcoal-and-gold theme with larger text, searchable mod cards,
 - **Mod UIs:** each loaded mod's detected menu shortcut, plus a card for every shortcut you, the mod or the known-mods list marks as a menu.
 - **Toggles:** a card for every toggle, in the same way. The panel stays open when sending a toggle. State is labeled **State unavailable** where a mod has no live-state interface.
 - **Hotkeys:** expand a mod to see its shortcuts, their controller buttons, and what each one does, with your own names and notes. **Send** presses any shortcut right away. Capture new key combinations in a single field, or let **Pick a free key** find one, with config backups. Exact conflicts are red; shared base keys with different modifiers are amber, and keys Steam or Windows already use count too.
+- **Radial menu:** pin up to eight mod menus and toggles, then hold a key, aim and let go to open one, without opening the panel. See below.
 - **Controller:** open the panel with a button combination, move with the d-pad or left stick, press with A, back out with B, and change tab with LB or RB on their own.
 - **Settings:** change the panel shortcut, manage tabs, choose each mod’s tab, and correct binding types.
 - **On-demand discovery:** scans when the panel opens, when you click **Refresh**, and after saving an edit. No periodic five-second scan.
@@ -81,6 +82,16 @@ Mods whose menus are controlled by ModHub are marked accordingly and must be ope
 Conflict detection covers recognized keyboard settings, including secondary gameplay keys, the controller combinations mods keep beside them, ModActivator's own shortcuts, and keys reserved outside the mods: Steam's default screenshot and overlay keys and Windows' Alt+Tab, Alt+F4, Ctrl+Shift+Esc and Print Screen. The game's own controls are not known to ModActivator; add the ones you care about under `[ReservedKeys]` in `ModActivator.User.ini`, one per line, such as `I = Game: inventory`. Unknown bindings are not covered.
 
 Controller buttons are read wherever mods keep them: after the key in the same value (`F8|LeftStick,RightStick,A`), or in a setting beside it (`PadToggle=BACK+LS` for `ToggleKey`, `StanceCycleButtons=L1+Down` for `StanceCycleKey`), as XInput or PlayStation names or as XInput's button bits. They are shown and checked, not edited; change them in the mod's own config.
+
+## Radial menu
+
+Every card in **Mod menus** and **Toggles** has a ring button. Click it to pin that card to the radial menu, up to eight; click again to take it off. **Settings → Radial menu** lists them in ring order, clockwise from the top, with **Up**, **Down** and **Remove**.
+
+Hold the key left of 1 (`` ` ``, `^` on German keyboards) and the ring appears in the middle of the screen. Move the mouse towards an entry and let go of the key to open it. Letting go with the mouse in the middle, or pressing **Escape**, closes the ring without doing anything. No cursor is shown: only the direction counts. On a controller, hold **LB + RB**, press **D-pad Up**, aim with the right stick and let go; the choice stays when the stick springs back.
+
+While the ring is open the camera stays still and the controller's buttons are kept from the game. **Settings → Radial menu** changes the key (`RadialKey`, `None` for off) and the combination (`RadialPad`), and what the game does meanwhile (`RadialPause`): it keeps running (`Off`), runs at a quarter speed (`Slow`), or stands still (`Freeze`). Slowing and freezing use the game's own fixed-timestep switch, found by its bytes the way Trinity finds it, and give it back as it was when the ring closes. If a game update moved that code, the log and Settings say so, and the ring works without it. If the game or another mod already uses that switch, ModActivator leaves it alone.
+
+The game sees the radial key too, as it sees every keyboard key: pick one it does not use. Like any other shortcut, it is checked for conflicts with your mods' keys.
 
 ## Controller
 

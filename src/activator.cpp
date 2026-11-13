@@ -285,9 +285,11 @@ static unsigned shortcutCode(const std::vector<int> &keys) {
   }
   return code;
 }
-static std::vector<int> openerKeys() {
-  auto code = opener.load();
+// The keys a shortcutCode stands for, modifiers first; empty for 0.
+static std::vector<int> codeKeys(unsigned code) {
   std::vector<int> keys;
+  if (!code)
+    return keys;
   if (code & (1u << 8))
     keys.push_back(VK_CONTROL);
   if (code & (1u << 9))
@@ -297,6 +299,18 @@ static std::vector<int> openerKeys() {
   keys.push_back(code & 0xff);
   return keys;
 }
+static std::vector<int> openerKeys() { return codeKeys(opener.load()); }
+// The radial menu's hold key as a shortcutCode, 0 for none: resolved by the
+// render thread from the setting for the current keyboard layout (see
+// radialKeyCode in mod_layout.h) and read by discovery for conflicts.
+static std::atomic<unsigned> radialCode{0};
+// Its controller combination (pad.h bits), 0 for none. LB + RB, then D-pad
+// Up: the panel's family (LB + RB, then Back), with the right thumb free for
+// the stick. Not Down: mods bind LB + Down (Combat Evolved's stance cycle),
+// which LB + RB + Down would press on the way.
+static constexpr unsigned defaultPadRadial =
+    XINPUT_GAMEPAD_LEFT_SHOULDER | XINPUT_GAMEPAD_RIGHT_SHOULDER | XINPUT_GAMEPAD_DPAD_UP;
+static std::atomic<unsigned> padRadial{defaultPadRadial};
 static unsigned heldModifiers() {
   return (held(VK_CONTROL) ? 1u << 8 : 0) |
          (held(VK_SHIFT) ? 1u << 9 : 0) |
@@ -449,6 +463,7 @@ void Write(const char *level, const char *fmt, ...) {
 } // namespace ml::Log
 #include "discovery.h"
 #include "hotkey_editor.h"
+#include "game_speed.h"
 #include "mod_layout.h"
 static bool key(int k, bool up, unsigned scan) {
   INPUT i{};
@@ -750,11 +765,11 @@ static bool framePadConnected = false;
 static int padTabStep = 0;
 
 static void readController(bool menuOpen) {
-  const unsigned shortcut = padOpener.load();
+  const unsigned shortcut = padOpener.load() | padRadial.load();
   framePadConnected = false;
-  if (!shortcut && !menuOpen)
+  if (!shortcut && !menuOpen && !State::Get().radialOpen)
     return; // nothing uses the controller: leave XInput alone
-  // In before the menu is first opened, so the shortcut's last button is
+  // In before the menu is first opened, so the shortcuts' last buttons are
   // kept from the game from the start.
   if (shortcut)
     hooks::EnsureXInputHooks();
@@ -792,6 +807,10 @@ static void logToggle(bool opened, const char *cause, unsigned buttons = 0) {
     snprintf(nth, sizeof nth, " - toggle %u this session", count);
   LOG("[menu] %s by %s%s%s", opened ? "opened" : "closed", cause, held, nth);
 }
+// The radial menu (radial.h, further down).
+static void pollRadial(bool foreground, bool accepts);
+static bool radialVisible();
+static bool radialIsOpen();
 void PollToggle() {
   static bool was = false;
   static bool escapeWas = false;
@@ -819,7 +838,8 @@ void PollToggle() {
                              ImGui::GetIO().WantTextInput;
     const bool acceptsShortcut = !UI::recording && !padShortcutRecording && !textEditing &&
                                  !s.sendingShortcut;
-    if (((now && !was) || padEdge) && acceptsShortcut) {
+    pollRadial(true, acceptsShortcut);
+    if (((now && !was) || padEdge) && acceptsShortcut && !radialIsOpen()) {
       s.menuOpen = !s.menuOpen;
       if (padEdge)
         logToggle(s.menuOpen, "the controller shortcut", padButtonsHeld(framePad));
@@ -835,6 +855,7 @@ void PollToggle() {
     }
     escapeWas = escape;
   } else {
+    pollRadial(false, false);
     if (s.menuOpen)
       logToggle(false, "the game window losing focus");
     s.menuOpen = false;
@@ -845,7 +866,7 @@ void PollToggle() {
   }
   was = now;
 }
-bool WantsDraw() { return State::Get().menuOpen; }
+bool WantsDraw() { return State::Get().menuOpen || radialVisible(); }
 // The controller as Dear ImGui's gamepad navigation: the d-pad or left stick
 // moves between items, A presses, B backs out, Y and X as ImGui assigns them.
 // The Win32 backend's own gamepad reading is compiled out
@@ -983,7 +1004,20 @@ static const MenuSnapshot &menuSnapshot() {
   return snap;
 }
 
+#include "radial.h"
+static bool radialIsOpen() { return radial.open; }
+
+// What the last click on a card's radial button did, shown for a moment.
+static std::string radialNote;
+static DWORD radialNoteAt = 0;
+static void renderPanel();
 void Render() {
+  if (State::Get().menuOpen)
+    renderPanel();
+  if (radialVisible())
+    drawRadial();
+}
+static void renderPanel() {
   auto &s = State::Get();
   auto &io = ImGui::GetIO();
   float u = UI::scale;
@@ -1089,7 +1123,8 @@ void Render() {
             const float labelX = handleX + 41 * u;
             ImGui::SetCursorPos(ImVec2(labelX, top));
             const float buttonX = ImGui::GetWindowContentRegionMax().x - 110 * u;
-            const float textWidth = buttonX - ImGui::GetCursorPosX() - 8 * u;
+            const float pinX = buttonX - 39 * u;
+            const float textWidth = pinX - ImGui::GetCursorPosX() - 8 * u;
             ImGui::PushClipRect(ImGui::GetCursorScreenPos(),
                                 ImVec2(ImGui::GetCursorScreenPos().x + textWidth,
                                        ImGui::GetWindowPos().y + 55 * u), true);
@@ -1113,8 +1148,36 @@ void Render() {
                 open = false;
             }
             ImGui::EndDisabled();
+            bool overButtons = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled);
+            // On the radial menu or not: a ring, filled gold when pinned.
+            ImGui::SetCursorPos(ImVec2(pinX, top + 5 * u));
+            const auto &id = cachedIdentity(a);
+            const bool pinned = radialPinned(id);
+            if (ImGui::Button("##Radial", ImVec2(31 * u, 31 * u))) {
+              if (toggleRadialPin(id))
+                radialNote = pinned ? "Taken off the radial menu." : "Pinned to the radial menu.";
+              else
+                radialNote = pinned || radialSlots.size() < radialSlotLimit
+                                 ? "Could not save the radial menu."
+                                 : "The radial menu is full (8). Take one off first, here or in Settings.";
+              radialNoteAt = GetTickCount();
+            }
+            {
+              const auto min = ImGui::GetItemRectMin(), max = ImGui::GetItemRectMax();
+              const ImVec2 mid((min.x + max.x) / 2, (min.y + max.y) / 2);
+              auto *list = ImGui::GetWindowDrawList();
+              const float r = 9 * u;
+              list->AddCircle(mid, r, ImGui::GetColorU32(pinned ? UI::gold : UI::muted), 24, 2.0f * u);
+              if (pinned)
+                list->AddCircleFilled(mid, r * 0.45f, ImGui::GetColorU32(UI::gold), 16);
+            }
+            if (ImGui::IsItemHovered()) {
+              overButtons = true;
+              ImGui::SetTooltip("%s", pinned ? "On the radial menu. Click to take it off."
+                                             : "Add to the radial menu.");
+            }
             if (!overHandle && !ImGui::GetDragDropPayload() &&
-                ImGui::IsWindowHovered() && !ImGui::IsItemHovered())
+                ImGui::IsWindowHovered() && !overButtons)
               UI::bindingTooltip(a, detail);
             ImGui::EndChild();
             dropOnCard(a, drop);
@@ -1135,6 +1198,8 @@ void Render() {
           ImGui::Separator();
           if (reorderFailed)
             ImGui::TextDisabled("Could not save mod order.");
+          else if (!radialNote.empty() && GetTickCount() - radialNoteAt < 4000)
+            ImGui::TextDisabled("%s", radialNote.c_str());
           else
             ImGui::TextDisabled("%s to close", shortcutLabel(openerKeys()).c_str());
           ImGui::EndTabItem();

@@ -674,6 +674,92 @@ extern "C" __declspec(dllexport) int ModActivatorKnownModsTest(const char *root)
   folder.clear();
   return result;
 }
+// The radial menu's logic: which wedge a direction picks, pinning (at most
+// eight, in order, kept in ModActivator.User.ini), its settings and their
+// defaults, and the byte search the freeze option relies on. root is an
+// empty folder.
+extern "C" __declspec(dllexport) int ModActivatorRadialTest(const char *root) {
+  if (!folder.empty() || !root)
+    return -1;
+  using ml::gui::radialWedge;
+  // Wedge 0 is centred on straight up, then clockwise. dx right, dy down.
+  if (radialWedge(0, -1, 4) != 0 || radialWedge(1, 0, 4) != 1 || radialWedge(0, 1, 4) != 2 ||
+      radialWedge(-1, 0, 4) != 3 || radialWedge(1, -1, 8) != 1 || radialWedge(-1, -1, 8) != 7 ||
+      radialWedge(0.2f, -1, 8) != 0 || radialWedge(-0.2f, -1, 8) != 0 || radialWedge(5, 5, 1) != 0 ||
+      radialWedge(1, 0, 0) != -1)
+    return 1;
+  folder = root;
+  const int result = [&] {
+    const auto user = userConfigPath();
+    DeleteFileA(user.c_str());
+    DeleteFileA(configPath("ModActivator.ini").c_str());
+    // Defaults: the key left of 1, LB + RB + Up, the game keeps running.
+    loadRadial();
+    const unsigned grave = radialKeyCode();
+    if (!grave || (grave & ~0xffu) || padRadial.load() != defaultPadRadial ||
+        ml::State::Get().padRadial.load() != defaultPadRadial || radialPause.load() != radialPauseOff ||
+        !radialSlots.empty() || radialCode.load() != grave)
+      return 2;
+    // Pinning: in order, eight at most, a second click takes it off.
+    for (int i = 0; i < 8; ++i)
+      if (!toggleRadialPin("mod" + std::to_string(i) + ".ini|menu|key"))
+        return 3;
+    if (toggleRadialPin("ninth.ini|menu|key") || radialSlots.size() != 8)
+      return 4;
+    if (!toggleRadialPin("mod3.ini|menu|key") || radialSlots.size() != 7 ||
+        radialPinned("mod3.ini|menu|key") || radialSlots[3] != "mod4.ini|menu|key")
+      return 5;
+    std::vector<std::string> before = radialSlots;
+    radialSlots.clear();
+    loadRadial();
+    if (radialSlots != before)
+      return 6;
+    // Settings written by hand: off for both, a frozen game; a single button
+    // is no combination; a key name.
+    WritePrivateProfileStringA("General", "RadialKey", "None", user.c_str());
+    WritePrivateProfileStringA("General", "RadialPad", "None", user.c_str());
+    WritePrivateProfileStringA("General", "RadialPause", "Freeze", user.c_str());
+    loadRadial();
+    if (radialKeyCode() || padRadial.load() || radialPause.load() != radialPauseFreeze)
+      return 7;
+    WritePrivateProfileStringA("General", "RadialKey", "F9", user.c_str());
+    WritePrivateProfileStringA("General", "RadialPad", "A", user.c_str());
+    WritePrivateProfileStringA("General", "RadialPause", "slow", user.c_str());
+    loadRadial();
+    if (radialKeyCode() != VK_F9 || padRadial.load() != defaultPadRadial || radialPause.load() != radialPauseSlow)
+      return 8;
+    // What the menu saves reads back.
+    if (!saveRadialKey(keyCodesText({VK_CONTROL, VK_F10})) || !saveRadialPad(XINPUT_GAMEPAD_BACK | XINPUT_GAMEPAD_Y) ||
+        !saveRadialPause(radialPauseOff))
+      return 9;
+    loadRadial();
+    if (radialKeyCode() != (VK_F10 | (1u << 8)) || padRadial.load() != (XINPUT_GAMEPAD_BACK | XINPUT_GAMEPAD_Y) ||
+        radialPause.load() != radialPauseOff)
+      return 10;
+    // The byte search: wildcards, the first of several matches, and a match
+    // at the very end of the data.
+    const auto pattern = gameSpeed::parseSignature("80 3D ?? ?? 01 75");
+    const uint8_t data[] = {0x80, 0x3D, 0x00, 0x80, 0x3D, 0xAA, 0xBB, 0x01, 0x75, 0x00,
+                            0x80, 0x3D, 0x11, 0x22, 0x01, 0x75};
+    int matches = 0;
+    if (gameSpeed::findSignature(data, sizeof data, pattern, &matches) != data + 3 || matches != 2 ||
+        gameSpeed::findSignature(data + 4, sizeof data - 4, pattern, &matches) != data + 10 || matches != 1 ||
+        gameSpeed::findSignature(data, 5, pattern, &matches) || matches)
+      return 11;
+    const uint8_t rip[] = {0x10, 0x00, 0x00, 0x00};
+    if (gameSpeed::ripTarget(data + 4, rip) != data + 20)
+      return 12;
+    return 0;
+  }();
+  folder.clear();
+  radialSlots.clear();
+  radialKeyText = "Grave";
+  padRadial.store(defaultPadRadial);
+  ml::State::Get().padRadial.store(0);
+  radialPause.store(radialPauseOff);
+  refreshRequested.store(false);
+  return result;
+}
 extern "C" __declspec(dllexport) int ModActivatorConflictTest() {
   return conflict({17, 119}, {119, 17}) == 2 &&
                  conflict({17, 119}, {16, 119}) == 1 &&

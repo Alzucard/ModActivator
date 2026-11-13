@@ -499,8 +499,8 @@ static int reservedConflict(const std::vector<int> &keys, const std::vector<int>
 // and keys reserved by Steam, Windows or you. Controller clashes are marked
 // as such, since the keys themselves may be clear.
 static void markConflicts(std::vector<Action> &all, const std::vector<ReservedKey> &reserved) {
-  const auto ownKeys = openerKeys();
-  const unsigned ownPad = padOpener.load();
+  const auto ownKeys = openerKeys(), radialKeys = codeKeys(radialCode.load());
+  const unsigned ownPad = padOpener.load(), radialPad = padRadial.load();
   std::map<int, std::vector<size_t>> bindingsByKey;
   for (size_t i = 0; i < all.size(); ++i)
     bindingsByKey[all[i].cachedKeys.back()].push_back(i);
@@ -516,6 +516,8 @@ static void markConflicts(std::vector<Action> &all, const std::vector<ReservedKe
     };
     note(conflict(a.cachedKeys, ownKeys), "ModActivator");
     note(padConflict(a.padButtons, ownPad), "ModActivator (controller)");
+    note(conflict(a.cachedKeys, radialKeys), "ModActivator radial menu");
+    note(padConflict(a.padButtons, radialPad), "ModActivator radial menu (controller)");
     for (size_t j : bindingsByKey.at(a.cachedKeys.back()))
       if (i != j)
         note(conflict(a.cachedKeys, all[j].cachedKeys), all[j].label);

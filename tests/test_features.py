@@ -119,3 +119,11 @@ tmp.mkdir()
 result = ctl((str(tmp) + '\\').encode())
 assert result == 0, f'controller check failed at step {result}'
 print('PASS: controller spellings, the reload key lookup, and the saved controller shortcut.')
+
+radial = m.ModActivatorRadialTest
+radial.argtypes = [ctypes.c_char_p]
+tmp = root / 'radial'
+tmp.mkdir()
+result = radial((str(tmp) + chr(92)).encode())
+assert result == 0, f'radial check failed at step {result}'
+print('PASS: the radial menu: wedge directions, pinning eight in order, its settings, and the byte search.')

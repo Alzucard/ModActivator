@@ -129,6 +129,130 @@ static std::vector<std::string> relocateFiles() {
   return done;
 }
 
+// --- the radial menu's settings -----------------------------------------------
+// Up to eight pinned cards, by identity, in ring order (clockwise from the
+// top): [Radial] S0 to S7 of ModActivator.User.ini, hex-encoded like the
+// layout. The hold key, the controller combination and what happens to the
+// game while the ring is open are [General] settings: yours from the menu
+// first, then ModActivator.ini's, then the defaults.
+static constexpr size_t radialSlotLimit = 8;
+static std::vector<std::string> radialSlots; // render thread, after loadLayout
+static std::string radialKeyText = "Grave";   // render thread
+enum RadialPause { radialPauseOff = 0, radialPauseSlow = 1, radialPauseFreeze = 2 };
+static std::atomic<int> radialPause{radialPauseOff};
+static const char *const radialPauseNames[] = {"Off", "Slow", "Freeze"};
+
+static std::string generalSetting(const char *key) {
+  char value[128]{};
+  GetPrivateProfileStringA("General", key, "", value, sizeof value, userConfigPath().c_str());
+  if (!value[0])
+    GetPrivateProfileStringA("General", key, "", value, sizeof value,
+                             configPath("ModActivator.ini").c_str());
+  return trimConfigLine(value);
+}
+// The hold key for the current keyboard layout, as a shortcutCode, published
+// to radialCode for the conflict checks. Grave, the default, is the key left
+// of 1 wherever it sits on the layout; None turns the key off.
+static unsigned radialKeyCode() {
+  static HKL layout = nullptr;
+  static std::string text;
+  static unsigned code = 0;
+  const HKL now = gameKeyboardLayout();
+  if (now != layout || text != radialKeyText) {
+    layout = now;
+    text = radialKeyText;
+    code = text.empty() || !_stricmp(text.c_str(), "none") ? 0 : shortcutCode(parseShortcut(text, now));
+    radialCode.store(code);
+  }
+  return code;
+}
+static void loadRadial() {
+  const auto key = generalSetting("RadialKey");
+  radialKeyText = key.empty() ? "Grave" : key;
+  radialKeyCode();
+  const auto pad = generalSetting("RadialPad");
+  const unsigned bits = padButtonsFrom(pad);
+  const bool off = !_stricmp(pad.c_str(), "none");
+  padRadial.store(off ? 0 : pad.empty() || __builtin_popcount(bits) < 2 ? defaultPadRadial : bits);
+  ml::State::Get().padRadial.store(padRadial.load());
+  const auto pause = lower(generalSetting("RadialPause"));
+  radialPause.store(pause == "freeze" ? radialPauseFreeze : pause == "slow" ? radialPauseSlow : radialPauseOff);
+  radialSlots.clear();
+  const auto path = userConfigPath();
+  for (size_t i = 0; i < radialSlotLimit; ++i) {
+    char value[1024]{};
+    GetPrivateProfileStringA("Radial", ("S" + std::to_string(i)).c_str(), "", value, sizeof value,
+                             path.c_str());
+    auto id = unhexText(value);
+    if (!id.empty() && std::find(radialSlots.begin(), radialSlots.end(), id) == radialSlots.end())
+      radialSlots.push_back(std::move(id));
+  }
+}
+static bool saveRadialSlots(std::vector<std::string> next) {
+  if (next.size() > radialSlotLimit)
+    return false;
+  std::string section;
+  for (size_t i = 0; i < next.size(); ++i)
+    section += "S" + std::to_string(i) + "=" + hexText(next[i]) + '\0';
+  if (section.empty())
+    section += '\0';
+  if (!WritePrivateProfileSectionA("Radial", section.c_str(), writableUserConfig().c_str()))
+    return false;
+  radialSlots = std::move(next);
+  return true;
+}
+static bool radialPinned(const std::string &id) {
+  return std::find(radialSlots.begin(), radialSlots.end(), id) != radialSlots.end();
+}
+// Pins a card to the end of the ring, or takes it off. False when the ring is
+// full or the file cannot be written.
+static bool toggleRadialPin(const std::string &id) {
+  auto next = radialSlots;
+  if (const auto at = std::find(next.begin(), next.end(), id); at != next.end())
+    next.erase(at);
+  else if (next.size() < radialSlotLimit)
+    next.push_back(id);
+  else
+    return false;
+  return saveRadialSlots(std::move(next));
+}
+static bool saveRadialKey(const std::string &text) {
+  if (!WritePrivateProfileStringA("General", "RadialKey", text.c_str(), writableUserConfig().c_str()))
+    return false;
+  radialKeyText = text;
+  radialKeyCode();
+  refreshRequested.store(true); // conflicts are worked out again
+  return true;
+}
+static bool saveRadialPad(unsigned bits) {
+  if (!WritePrivateProfileStringA("General", "RadialPad", bits ? padLabel(bits).c_str() : "None",
+                                  writableUserConfig().c_str()))
+    return false;
+  padRadial.store(bits);
+  ml::State::Get().padRadial.store(bits);
+  refreshRequested.store(true);
+  return true;
+}
+static bool saveRadialPause(int mode) {
+  if (mode < radialPauseOff || mode > radialPauseFreeze ||
+      !WritePrivateProfileStringA("General", "RadialPause", radialPauseNames[mode],
+                                  writableUserConfig().c_str()))
+    return false;
+  radialPause.store(mode);
+  return true;
+}
+// Keys written as the menu records them: hex codes joined with +, like the
+// panel's own shortcut.
+static std::string keyCodesText(const std::vector<int> &keys) {
+  std::string value;
+  for (int key : keys) {
+    char hex[8]{};
+    snprintf(hex, sizeof hex, "0x%02X", key);
+    value += (value.empty() ? "" : "+") + std::string(hex);
+  }
+  return value;
+}
+
 static void loadLayout() {
   const auto path = userConfigPath();
   // Yours from the menu first; then ModActivator.ini, for anyone who sets it
@@ -151,6 +275,7 @@ static void loadLayout() {
   const bool off = !_stricmp(trimConfigLine(pad).c_str(), "none");
   padOpener.store(off ? 0 : __builtin_popcount(padBits) >= 2 ? padBits : defaultPadOpener);
   ml::State::Get().padShortcut.store(padOpener.load());
+  loadRadial();
   const auto section = readProfileSection("ModLayout", path);
   ModLayout loaded;
   std::map<unsigned long, ModPlacement> ordered;
@@ -309,14 +434,7 @@ static bool saveOpener(const std::vector<int> &keys) {
   const auto code = shortcutCode(keys);
   if (!code || (code & 0xff) == VK_ESCAPE)
     return false;
-  std::string value;
-  for (int key : keys) {
-    if (!value.empty())
-      value += '+';
-    char hex[8]{};
-    snprintf(hex, sizeof hex, "0x%02X", key);
-    value += hex;
-  }
+  const auto value = keyCodesText(keys);
   if (!WritePrivateProfileStringA("General", "OpenShortcut", value.c_str(),
                                   writableUserConfig().c_str()))
     return false;
@@ -371,6 +489,148 @@ static unsigned recordPadShortcut(bool &recording) {
   return taken;
 }
 
+// The controller recording is for the radial menu's combination, not the
+// panel's, and what it took.
+static bool padRecordingRadial = false;
+static unsigned radialPadProposed = 0;
+
+// Settings' part for the radial menu: its keys, its eight slots in order,
+// and what happens to the game while it is open.
+static void drawRadialSettings(const std::vector<Action> &actions, std::string &status) {
+  ImGui::TextColored(UI::gold, "Radial menu");
+  ImGui::TextDisabled("Hold the key, aim with the mouse or the right stick, let go to open.");
+  static std::vector<int> proposed;
+  static bool acknowledge = false;
+  const unsigned code = radialKeyCode();
+  ImGui::Text("Hold key: %s", code ? shortcutLabel(codeKeys(code)).c_str() : "none");
+  if (auto keys = UI::recordShortcut("Record radial key"); !keys.empty()) {
+    proposed = std::move(keys);
+    acknowledge = false;
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Default##RadialKey")) {
+    status = saveRadialKey("Grave") ? "Radial key reset to the key left of 1." : "Could not save the radial key.";
+    proposed.clear();
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Off##RadialKey")) {
+    status = saveRadialKey("None") ? "Radial key off." : "Could not save the radial key.";
+    proposed.clear();
+  }
+  if (!proposed.empty()) {
+    ImGui::Text("New radial key: %s", shortcutLabel(proposed).c_str());
+    bool clashes = conflict(proposed, openerKeys()) != 0;
+    if (clashes)
+      ImGui::TextWrapped("Overlaps ModActivator's own shortcut.");
+    for (const auto &a : bindingsSnapshot())
+      if (conflict(proposed, a.cachedKeys)) {
+        clashes = true;
+        ImGui::TextWrapped("Overlaps %s / %s", UI::name(a).c_str(), UI::actionName(a).c_str());
+      }
+    for (const auto &[severity, who] : reservedClashes(proposed)) {
+      clashes = true;
+      ImGui::TextWrapped("%s %s", severity == 2 ? "Already used by" : "Overlaps", displayText(who).c_str());
+    }
+    ImGui::TextDisabled("The game sees this key too: pick one it does not use.");
+    if (clashes)
+      ImGui::Checkbox("Save despite overlap##Radial", &acknowledge);
+    ImGui::BeginDisabled((clashes && !acknowledge) || proposed.back() == VK_ESCAPE);
+    if (ImGui::Button("Save radial key")) {
+      status = saveRadialKey(keyCodesText(proposed)) ? "Radial key updated." : "Could not save the radial key.";
+      proposed.clear();
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (ImGui::Button("Discard##RadialKey"))
+      proposed.clear();
+  }
+
+  const unsigned pad = padRadial.load();
+  ImGui::Text("Hold on the controller: %s", pad ? padLabel(pad).c_str() : "none");
+  if (ImGui::Button(padShortcutRecording && padRecordingRadial ? "Press and release a combination...##RadialPad"
+                                                               : "Record##RadialPad")) {
+    const bool stop = padShortcutRecording && padRecordingRadial;
+    padShortcutRecording = !stop;
+    padRecordingRadial = !stop;
+    radialPadProposed = 0;
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Default##RadialPad"))
+    radialPadProposed = defaultPadRadial;
+  ImGui::SameLine();
+  if (ImGui::Button("Off##RadialPad"))
+    status = saveRadialPad(0) ? "Radial controller combination off." : "Could not save it.";
+  if (radialPadProposed) {
+    ImGui::Text("New combination: %s", padLabel(radialPadProposed).c_str());
+    if (padConflict(radialPadProposed, padOpener.load()))
+      ImGui::TextWrapped("Overlaps the panel's controller shortcut (%s).", padLabel(padOpener.load()).c_str());
+    for (const auto &a : bindingsSnapshot())
+      if (padConflict(radialPadProposed, a.padButtons))
+        ImGui::TextWrapped("Overlaps %s / %s (%s)", UI::name(a).c_str(), UI::actionName(a).c_str(),
+                           padLabel(a.padButtons).c_str());
+    if (ImGui::Button("Save combination##RadialPad")) {
+      status = saveRadialPad(radialPadProposed) ? "Radial controller combination updated." : "Could not save it.";
+      radialPadProposed = 0;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Discard##RadialPad"))
+      radialPadProposed = 0;
+  }
+
+  int pause = radialPause.load();
+  static const char *pauseLabels[] = {"Keeps running", "Slow motion", "Freezes"};
+  ImGui::SetNextItemWidth(220 * UI::scale);
+  if (ImGui::Combo("The game while the ring is open", &pause, pauseLabels, IM_ARRAYSIZE(pauseLabels))) {
+    status = saveRadialPause(pause) ? "Saved." : "Could not save it.";
+    if (pause)
+      gameSpeed::prepare();
+  }
+  if (radialPause.load())
+    ImGui::TextDisabled("Slowing and freezing: %s", gameSpeed::statusText());
+
+  ImGui::Spacing();
+  ImGui::TextUnformatted("On the ring, clockwise from the top");
+  if (radialSlots.empty())
+    ImGui::TextDisabled("Nothing yet. Use the ring button on a card in Mod menus or Toggles.");
+  for (size_t i = 0; i < radialSlots.size(); ++i) {
+    ImGui::PushID(static_cast<int>(i));
+    const auto &id = radialSlots[i];
+    const auto found = std::find_if(actions.begin(), actions.end(),
+                                    [&](const Action &a) { return cachedIdentity(a) == id; });
+    const std::string label = found == actions.end() ? id + " (not loaded)"
+                                                     : UI::name(*found) + " / " + UI::actionName(*found);
+    ImGui::Text("%zu.", i + 1);
+    ImGui::SameLine();
+    ImGui::TextUnformatted(label.c_str());
+    ImGui::SameLine();
+    auto next = radialSlots;
+    bool changed = false;
+    ImGui::BeginDisabled(i == 0);
+    if (ImGui::SmallButton("Up")) {
+      std::swap(next[i], next[i - 1]);
+      changed = true;
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(i + 1 == radialSlots.size());
+    if (ImGui::SmallButton("Down")) {
+      std::swap(next[i], next[i + 1]);
+      changed = true;
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Remove")) {
+      next.erase(next.begin() + i);
+      changed = true;
+    }
+    ImGui::PopID();
+    if (changed) {
+      status = saveRadialSlots(std::move(next)) ? "Radial menu saved." : "Could not save the radial menu.";
+      break; // the list changed under the loop
+    }
+  }
+}
+
 // cardsStamp changes whenever the menu rebuilds `actions`.
 static void drawSettings(const std::vector<Action> &actions, unsigned cardsStamp) {
   static char tabName[64]{};
@@ -398,15 +658,19 @@ static void drawSettings(const std::vector<Action> &actions, unsigned cardsStamp
     auto &padRecording = padShortcutRecording;
     const unsigned current = padOpener.load();
     ImGui::Text("Controller shortcut: %s", current ? padLabel(current).c_str() : "none");
-    if (ImGui::Button(padRecording ? "Press and release a combination...##Pad" : "Record controller shortcut")) {
-      padRecording = !padRecording;
+    if (ImGui::Button(padRecording && !padRecordingRadial ? "Press and release a combination...##Pad"
+                                                          : "Record controller shortcut")) {
+      padRecording = !padRecording || padRecordingRadial;
+      padRecordingRadial = false;
       padProposed = 0;
     }
+    // One recording at a time, for the panel's combination or the radial
+    // menu's (Settings further down).
     if (const unsigned taken = recordPadShortcut(padRecording)) {
-      padProposed = taken;
-      status = __builtin_popcount(taken) < 2 ? "Use two buttons or more, such as LB + RB + Back." : "";
-      if (__builtin_popcount(taken) < 2)
-        padProposed = 0;
+      const bool enough = __builtin_popcount(taken) >= 2;
+      status = enough ? "" : "Use two buttons or more, such as LB + RB + Back.";
+      (padRecordingRadial ? radialPadProposed : padProposed) = enough ? taken : 0;
+      padRecordingRadial = false;
     }
     ImGui::SameLine();
     if (ImGui::Button("Controller off")) {
@@ -467,6 +731,8 @@ static void drawSettings(const std::vector<Action> &actions, unsigned cardsStamp
       proposed.clear();
   }
 
+  ImGui::Separator();
+  drawRadialSettings(actions, status);
   ImGui::Separator();
   ImGui::TextUnformatted("Custom tabs");
   if (ImGui::BeginCombo("##TabToEdit", editingTab && modLayout.tabs.count(editingTab)

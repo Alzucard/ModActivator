@@ -369,6 +369,28 @@ namespace ml::input
         ResetInputLocked(false);
         Unlock();
     }
+    void CentreCursor()
+    {
+        int w, h; ClientSize(&w, &h);
+        Lock();
+        g_vx = w * 0.5f; g_vy = h * 0.5f;
+        ResetInputLocked(false); // nothing is queued for ImGui: the ring only aims
+        Unlock();
+    }
+    void PlaceCursor(float x, float y)
+    {
+        Lock();
+        g_vx = x; g_vy = y;
+        Unlock();
+    }
+    void VirtualCursor(float* x, float* y, float* w, float* h)
+    {
+        int cw, ch; ClientSize(&cw, &ch);
+        Lock();
+        *x = g_vx; *y = g_vy;
+        Unlock();
+        *w = static_cast<float>(cw); *h = static_cast<float>(ch);
+    }
 
     // --- window procedure ---------------------------------------------------
     static bool IsMouse(UINT m)    { return m >= WM_MOUSEFIRST && m <= WM_MOUSELAST; }

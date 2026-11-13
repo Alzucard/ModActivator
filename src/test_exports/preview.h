@@ -8,13 +8,16 @@
 // Set by ModActivatorThumbnail (1) and ModActivatorHeader (2) for one
 // ModActivatorPreview call: which Nexus image to draw around the panel.
 static int sceneMode = 0;
+// Set by ModActivatorRadialPreview: the radial menu instead of the panel,
+// with this entry chosen (0 for none, else entry + 1).
+static int radialPreview = 0;
 extern "C" __declspec(dllexport) int ModActivatorPreview(const char *path,
                                                          int tab) {
   if (!folder.empty())
     return -1;
   previewMode = true;
   previewTab = tab;
-  ml::State::Get().menuOpen = true;
+  ml::State::Get().menuOpen = !radialPreview;
   catalog.clear();
   allBindings.clear();
   restartRequired.clear();
@@ -112,7 +115,7 @@ extern "C" __declspec(dllexport) int ModActivatorPreview(const char *path,
   };
   const bool thumbnail = sceneMode != 0;
   const Scene &scene = scenes[thumbnail ? sceneMode - 1 : 0];
-  io.DisplaySize = thumbnail ? scene.display : ImVec2(1000, 860);
+  io.DisplaySize = thumbnail ? scene.display : radialPreview ? ImVec2(1280, 720) : ImVec2(1000, 860);
   io.DeltaTime = 1.0f / 60;
   io.IniFilename = nullptr;
   ml::gui::InitStyle(thumbnail ? 0.86f : 1.0f);
@@ -136,8 +139,28 @@ extern "C" __declspec(dllexport) int ModActivatorPreview(const char *path,
   int w, h;
   io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
   io.Fonts->SetTexID((ImTextureID)1);
+  if (radialPreview) {
+    // Six cards pinned, as someone might: menus and toggles, one mod twice.
+    radialSlots.clear();
+    for (const char *id : {"crimsonroute.ini|settingswindow|managelocationshotkey",
+                           "privatestorageanywhere.ini|hotkeys|privatehotkey",
+                           "privatestorageanywhere.ini|hotkeys|dresserhotkey", "cdwiki.ini|cdwiki|togglekey",
+                           "kc- gilded compass.ini|menu|maphotkeyvk", "crimsonroute.ini|automove|togglehotkey"})
+      radialSlots.push_back(id);
+    ml::gui::fillRadialEntries();
+    ml::gui::radial.open = true;
+    ml::gui::radial.openedAt = GetTickCount() - 1000;
+    ml::gui::radial.selected = radialPreview - 2;
+  }
   for (int i = 0; i < 4; ++i) {
     ImGui::NewFrame();
+    if (radialPreview) {
+      // A dim, warm scene behind the ring, like the game at dusk.
+      auto *bg = ImGui::GetBackgroundDrawList();
+      bg->AddRectFilledMultiColor(ImVec2(0, 0), io.DisplaySize, IM_COL32(58, 52, 46, 255),
+                                  IM_COL32(58, 52, 46, 255), IM_COL32(24, 20, 18, 255),
+                                  IM_COL32(24, 20, 18, 255));
+    }
     if (thumbnail) {
       auto *bg = ImGui::GetBackgroundDrawList();
       const ImVec2 size = io.DisplaySize;
@@ -221,7 +244,17 @@ extern "C" __declspec(dllexport) int ModActivatorPreview(const char *path,
   fclose(f);
   ImGui::DestroyContext(ctx);
   previewMode = false;
+  ml::gui::radial = {};
+  radialSlots.clear();
   return 0;
+}
+// The radial menu as it looks in the game (1280 x 720), with entry
+// `selected` chosen, -1 for none.
+extern "C" __declspec(dllexport) int ModActivatorRadialPreview(const char *path, int selected) {
+  radialPreview = selected + 2;
+  const int result = ModActivatorPreview(path, 0);
+  radialPreview = 0;
+  return result;
 }
 // The Nexus thumbnail (1280 x 720): ModActivatorPreview's samples on the
 // given tab, beside the name and a line about what the mod does.

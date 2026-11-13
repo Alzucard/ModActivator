@@ -1,6 +1,6 @@
 # Third-party notices
 
-ModActivator contains adapted code from Master Looter (MIT, copyright 2026 Seth). Its rendering hooks, HDR composite shaders and XInput hooks derive from Trinity (MIT, copyright 2026 XeTrinityz). The full license texts are retained in `licenses/OVERLAY-LICENSE.txt` and `licenses/UPSTREAM-NOTICES.md`.
+ModActivator contains adapted code from Master Looter (MIT, copyright 2026 Seth). Its rendering hooks, HDR composite shaders and XInput hooks derive from Trinity (MIT, copyright 2026 XeTrinityz). The radial menu's way of slowing or freezing the game (`src/game_speed.h`) uses Trinity's description of the game's fixed-timestep override and its byte signature. The full license texts are retained in `licenses/OVERLAY-LICENSE.txt` and `licenses/UPSTREAM-NOTICES.md`.
 
 Dear ImGui is used under its MIT license. A modified DirectX 12 backend uses precompiled shaders rather than compiling them at runtime. Full license: `licenses/IMGUI-LICENSE.txt` and `vendor/imgui/LICENSE.txt`.
 

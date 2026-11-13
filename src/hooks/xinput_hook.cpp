@@ -30,19 +30,21 @@ namespace ml::hooks
     // While every button of ModActivator's controller shortcut is held, those
     // buttons are kept from the game, so the press that completes it (and the
     // hold that follows) does not also act in the game.
+    // The same for the radial menu's combination.
     static void MaskShortcut(XINPUT_STATE* s)
     {
-        const unsigned mask = State::Get().padShortcut.load();
-        if (!mask)
-            return;
         auto& pad = s->Gamepad;
         const unsigned held = pad.wButtons |
             (pad.bLeftTrigger >= 64 ? (1u << 16) : 0) | (pad.bRightTrigger >= 64 ? (1u << 17) : 0);
-        if ((held & mask) != mask)
-            return;
-        pad.wButtons &= static_cast<WORD>(~mask);
-        if (mask & (1u << 16)) pad.bLeftTrigger = 0;
-        if (mask & (1u << 17)) pad.bRightTrigger = 0;
+        const unsigned masks[] = { State::Get().padShortcut.load(), State::Get().padRadial.load() };
+        for (const unsigned mask : masks)
+        {
+            if (!mask || (held & mask) != mask)
+                continue;
+            pad.wButtons &= static_cast<WORD>(~mask);
+            if (mask & (1u << 16)) pad.bLeftTrigger = 0;
+            if (mask & (1u << 17)) pad.bRightTrigger = 0;
+        }
     }
 
     // A distinct detour per module so each can call the matching trampoline

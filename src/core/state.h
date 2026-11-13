@@ -18,13 +18,17 @@ namespace ml
         // ModActivator's controller shortcut (pad.h bits), kept from the game
         // while all of it is held. 0 when there is none.
         std::atomic<unsigned> padShortcut{0};
+        // The radial menu: open while its key or controller combination is
+        // held, and that combination (kept from the game like padShortcut).
+        std::atomic<bool> radialOpen{false};
+        std::atomic<unsigned> padRadial{0};
 
         // When the overlay last actually drew a frame. The menu can only be
         // opened or closed from inside the render path, so if drawing stops
         // while it is open there is no way left to close it.
         std::atomic<DWORD> lastDrawAt{0};
 
-        // True while the menu owns keyboard, mouse and pad.
+        // True while the menu or the radial menu owns keyboard, mouse and pad.
         //
         // Gated on the overlay having drawn recently. Without that, an overlay
         // that stops drawing with the menu open leaves the pad zeroed for the
@@ -35,7 +39,7 @@ namespace ml
         // would spend wondering why the pad died.
         bool Captures() const
         {
-            if (!menuOpen) return false;
+            if (!menuOpen && !radialOpen) return false;
             const DWORD drawn = lastDrawAt.load();
             return drawn && (GetTickCount() - drawn) < 500;
         }

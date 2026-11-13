@@ -1,7 +1,7 @@
 # Third-party notices
 
 ## Trinity
-`src/hooks/dx12_hook.cpp`, `dx12_hook.h`, `hdr_composite_shader.h`, `xinput_hook.cpp` and `xinput_hook.h` are adapted from Trinity, https://github.com/XeTrinityz/Trinity, by `scripts/adapt_trinity_dx12.py`.
+`src/game_speed.h` uses the game-speed signature and the description of the game's fixed-timestep override from Trinity's `src/game/offsets.h` and `src/game/world.cpp`. `src/hooks/dx12_hook.cpp`, `dx12_hook.h`, `hdr_composite_shader.h`, `xinput_hook.cpp` and `xinput_hook.h` are adapted from Trinity, https://github.com/XeTrinityz/Trinity, by `scripts/adapt_trinity_dx12.py`.
 
 MIT License
 

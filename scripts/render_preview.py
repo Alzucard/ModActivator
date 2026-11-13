@@ -62,8 +62,12 @@ for tab, name in [(0, 'mod-menus'), (1, 'toggles'), (2, 'hotkeys'), (65536, 'set
 
 # The Nexus images, whole scenes, not cropped: the thumbnail (16:9, the Mod
 # menus tab) and the header banner (4:1, the Hotkeys tab).
+# And the radial menu over a game-like backdrop (1280 x 720), with the
+# second entry chosen and with none.
 for export, name, tab, width, height in [('ModActivatorThumbnail', 'thumbnail', 0, 1280, 720),
-                                         ('ModActivatorHeader', 'header', 2, 1920, 480)]:
+                                         ('ModActivatorHeader', 'header', 2, 1920, 480),
+                                         ('ModActivatorRadialPreview', 'radial', 1, 1280, 720),
+                                         ('ModActivatorRadialPreview', 'radial-idle', -1, 1280, 720)]:
     draw = getattr(m, export)
     draw.argtypes = [ctypes.c_char_p, ctypes.c_int]
     data, pixels = build / f'preview-{name}.bin', build / f'preview-{name}.rgba'

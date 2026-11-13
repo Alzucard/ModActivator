@@ -19,6 +19,12 @@ namespace ml::input
 
     void MenuOpened();   // centres the virtual cursor
     void MenuClosed();
+    // The radial menu aims with the same virtual cursor, without a cursor on
+    // screen and without feeding ImGui: centre it when the ring opens, then
+    // read where the mouse has moved it, with the window's client size.
+    void CentreCursor();
+    void PlaceCursor(float x, float y);
+    void VirtualCursor(float* x, float* y, float* w, float* h);
     // Render thread, before ImGui::NewFrame: submit the cursor and queued input.
     void FeedInput(ImGuiIO& io);
     // The size of the target the menu is drawn into, which is the swapchain's
