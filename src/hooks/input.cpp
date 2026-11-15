@@ -20,8 +20,11 @@ namespace ml::input
     static HWND    g_hwnd     = nullptr;
 
     // --- virtual cursor -----------------------------------------------------
-    static CRITICAL_SECTION g_cs;
-    static bool  g_csReady = false;
+    // A slim lock needs no setup, so it is ready before Init: the radial menu
+    // aims the cursor (CentreCursor) on the frame it opens, which comes before
+    // the renderer and Init when the ring is opened before the panel. A critical
+    // section there was still zeroed memory, and entering it crashed the game.
+    static SRWLOCK g_cs = SRWLOCK_INIT;
     static float g_vx = 0, g_vy = 0;         // client coordinates
     static bool  g_rawButtons = false;       // the game asked for no legacy button messages
     enum class InputKind { Key, Character, MouseButton, Wheel, Focus };
@@ -56,8 +59,8 @@ namespace ml::input
     static DWORD   g_dbgNext   = 0;
     static WNDPROC g_ours      = nullptr;
 
-    static void Lock()   { EnterCriticalSection(&g_cs); }
-    static void Unlock() { LeaveCriticalSection(&g_cs); }
+    static void Lock()   { AcquireSRWLockExclusive(&g_cs); }
+    static void Unlock() { ReleaseSRWLockExclusive(&g_cs); }
 
     static void PushInputLocked(const PendingInput& event)
     {
@@ -132,7 +135,10 @@ namespace ml::input
     static void ClientSize(int* w, int* h)
     {
         RECT rc = {};
-        if (g_hwnd && GetClientRect(g_hwnd, &rc)) { *w = rc.right - rc.left; *h = rc.bottom - rc.top; }
+        // Before Init the game window is not known yet, but the ring only
+        // opens while it is in front.
+        const HWND window = g_hwnd ? g_hwnd : GetForegroundWindow();
+        if (window && GetClientRect(window, &rc)) { *w = rc.right - rc.left; *h = rc.bottom - rc.top; }
         else { *w = 1920; *h = 1080; }
     }
 
@@ -543,7 +549,6 @@ namespace ml::input
     void Init(HWND hwnd)
     {
         if (g_original) return;
-        if (!g_csReady) { InitializeCriticalSection(&g_cs); g_csReady = true; }
         g_hwnd = hwnd;
         g_ours = &WndProc;
         // The window thread can call WndProc the moment the subclass lands,
@@ -568,9 +573,8 @@ namespace ml::input
 #ifdef MODACTIVATOR_TESTS // see the test entry points in activator.cpp
     extern "C" __declspec(dllexport) int ModActivatorInputQueueTest()
     {
-        if (g_csReady)
+        if (g_original)
             return -1;
-        InitializeCriticalSection(&g_cs);
         auto *context = ImGui::CreateContext();
         auto &io = ImGui::GetIO();
         g_dbgLines = 3;
@@ -634,7 +638,6 @@ namespace ml::input
 
         ResetInputLocked(false);
         ImGui::DestroyContext(context);
-        DeleteCriticalSection(&g_cs);
         g_dbgLines = 0;
         return result;
     }

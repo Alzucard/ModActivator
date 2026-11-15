@@ -98,8 +98,9 @@ static void openRadial(bool viaPad) {
   input::VirtualCursor(&radial.lastX, &radial.lastY, &w, &h);
   State::Get().radialOpen = true;
   gameSpeed::begin(radialPause.load(), radialFrameSeconds());
-  LOG("[radial] opened by %s, %zu of %zu pinned entries here.",
-      viaPad ? "the controller" : "the keyboard", radial.entries.size(), radialSlots.size());
+  LOG("[radial] opened by %s, %zu of %zu pinned entries here, game speed %s.",
+      viaPad ? "the controller" : "the keyboard", radial.entries.size(), radialSlots.size(),
+      gameSpeed::active ? radialPauseNames[radialPause.load()] : "untouched");
 }
 
 static void closeRadial(bool choose, const char *cause) {

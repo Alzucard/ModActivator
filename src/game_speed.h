@@ -77,6 +77,7 @@ static uint8_t *ripTarget(const uint8_t *instrEnd, const uint8_t *disp) {
 
 enum Status { notSearched, searching, found, notFound };
 static std::atomic<int> status{notSearched};
+
 static uint8_t *flag = nullptr; // set before status becomes found
 static uint8_t *once = nullptr;
 static float *step = nullptr;
@@ -152,13 +153,17 @@ static bool patchDisplacement(uint8_t *at, int32_t value) {
 
 // Points the step instruction (at `instr`, 8 bytes, displacement in its last
 // 4) at our own float. Null when it cannot.
+static const char *redirectFailure = "";
 static float *redirectStep(uint8_t *instr, const float *constant) {
   auto *own = static_cast<float *>(allocateNear(instr));
-  if (!own)
+  if (!own) {
+    redirectFailure = "no free memory was left within reach of it (other mods' hooks take that room too)";
     return nullptr;
+  }
   *own = *constant;
   const intptr_t distance = reinterpret_cast<intptr_t>(own) - reinterpret_cast<intptr_t>(instr + stepLen);
   if (distance < INT32_MIN || distance > INT32_MAX || !patchDisplacement(instr + 4, static_cast<int32_t>(distance))) {
+    redirectFailure = "the game's code there could not be changed";
     VirtualFree(own, 0, MEM_RELEASE);
     return nullptr;
   }
@@ -240,11 +245,12 @@ static DWORD WINAPI search(void *) {
       return 0;
     }
     status.store(notFound);
-    LOG_ERR("[radial] the game's speed control was found at %p, but %s, so the radial menu cannot slow or "
+    LOG_ERR("[radial] the game's speed control was found at %p, but %s%s, so the radial menu cannot slow or "
             "freeze the game.",
             static_cast<const void *>(match),
             !flagsWritable ? "its switches cannot be written"
-                           : "its step is a constant and the instruction reading it could not be pointed elsewhere");
+                           : "its step is a constant and the instruction reading it could not be pointed elsewhere: ",
+            flagsWritable ? redirectFailure : "");
     return 0;
   }
   status.store(notFound);
