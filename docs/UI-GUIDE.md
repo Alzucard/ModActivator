@@ -23,12 +23,15 @@ not a TV menu.
 
 ## Layout
 
-- **Header:** one line with the name, version, search, Refresh and close.
-- **Tabs:** Mod menus, Toggles, Hotkeys, your own tabs, a **+** to add one,
-  then Settings last. Right-click one of your tabs to rename or delete it,
+- **Header:** one line with the name, version, search, Settings, Refresh and
+  close.
+- **Tabs:** Mod menus, Toggles, Hotkeys, your own tabs, then a **+** to add
+  one. Hotkeys switches between Bindings and Placement (which tab each card
+  goes on). Right-click one of your tabs to rename or delete it,
   in a small popup, never a Settings page.
-- **Settings:** a list of pages on the left, one topic per page: Shortcuts,
-  Radial menu, Mod placement, Interface. A setting belongs to exactly one
+- **Settings:** the button beside Refresh shows it in place of the tabs, until
+  pressed again. A list of pages on the left, one topic per page: Shortcuts,
+  Radial menu, Interface; LB and RB step through them. A setting belongs to exactly one
   page; if you have to explain where to find it, it is on the wrong page.
 - **Setting rows:** the label in a fixed-width column on the left, then the
   current value, then the buttons. Every shortcut row looks the same:

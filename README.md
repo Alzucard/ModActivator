@@ -10,10 +10,10 @@ The panel uses a charcoal-and-gold theme with larger text, searchable mod cards,
 
 - **Mod UIs:** each loaded mod's detected menu shortcut, plus a card for every shortcut you, the mod or the known-mods list marks as a menu.
 - **Toggles:** a card for every toggle, in the same way. The panel stays open when sending a toggle. State is labeled **State unavailable** where a mod has no live-state interface.
-- **Hotkeys:** expand a mod to see its shortcuts, their controller buttons, and what each one does, with your own names and notes. **Send** presses any shortcut right away. Capture new key combinations in a single field, or let **Pick a free key** find one, with config backups. Exact conflicts are red; shared base keys with different modifiers are amber, and keys Steam or Windows already use count too.
+- **Hotkeys:** expand a mod to see its shortcuts, their controller buttons, and what each one does, with your own names and notes. **Send** presses any shortcut right away. Capture new key combinations in a single field, or let **Pick a free key** find one, with config backups. Exact conflicts are red; shared base keys with different modifiers are amber, and keys Steam or Windows already use count too. **Placement** chooses each mod's tab and corrects its binding type.
 - **Radial menu:** pin up to eight mod menus and toggles, then hold a key, aim and let go to open one, without opening the panel. See below.
 - **Controller:** open the panel with a button combination, move with the d-pad or left stick, press with A, back out with B, and change tab with LB or RB on their own.
-- **Settings:** change the panel shortcut, manage tabs, choose each mod’s tab, and correct binding types.
+- **Settings:** the button beside **Refresh**: the panel and radial menu shortcuts, what the game does while the ring is open, and the UI size.
 - **On-demand discovery:** scans when the panel opens, when you click **Refresh**, and after saving an edit. No periodic five-second scan.
 - Config reads and conflict calculations are cached outside normal menu rendering.
 
@@ -45,7 +45,7 @@ With ReShade 6.8.0 or newer, ModActivator draws through ReShade's add-on callbac
 
 ## Binding types
 
-ModActivator uses shortcut names and nearby INI comments to identify menu openers and feature toggles. To correct a guess, open **Settings → Mod placement** and set **Show as** to **Menu**, **Toggle**, or **Hotkeys only**. **Automatic** clears the override. These choices are saved in ModActivator.User.ini and apply immediately. Hotkeys shows a description preview when one is available (see below). Hover over a binding, here or in Mod placement, to see its exact key and the full description.
+ModActivator uses shortcut names and nearby INI comments to identify menu openers and feature toggles. To correct a guess, open **Hotkeys → Placement** and set **Show as** to **Menu**, **Toggle**, or **Hotkeys only**. **Automatic** clears the override. These choices are saved in ModActivator.User.ini and apply immediately. Hotkeys shows a description preview when one is available (see below). Hover over a binding, here or in Placement, to see its exact key and the full description.
 
 ## What a shortcut does
 
@@ -69,7 +69,7 @@ Symbolic shortcuts map by physical key position and display the key label for th
 
 ## Custom tabs and panel shortcut
 
-Click **+** after the tabs, enter a name and press Enter. Right-click one of your tabs to **Rename** or **Delete** it. Use the **Tab** column in **Settings → Mod placement** to move a mod to Mod menus, Toggles, or any custom tab. The **Show as** column controls how the binding is classified. Its action stays the same. Drag the handle on a mod card to reorder it within its tab. Deleting a tab returns its mods to their default tabs. Changes are saved in ModActivator.User.ini.
+Click **+** after the tabs, enter a name and press Enter. Right-click one of your tabs to **Rename** or **Delete** it. Use the **Tab** column in **Hotkeys → Placement** to move a mod to Mod menus, Toggles, or any custom tab. The **Show as** column controls how the binding is classified. Its action stays the same. Drag the handle on a mod card to reorder it within its tab. Deleting a tab returns its mods to their default tabs. Changes are saved in ModActivator.User.ini.
 
 In **Settings → Shortcuts**, click **Record** beside **Keyboard**, press the new keys, check what they overlap and click **Save**: the shortcut changes at once. **Default** proposes Ctrl+Shift+Backspace again.
 

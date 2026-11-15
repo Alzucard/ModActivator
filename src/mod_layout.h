@@ -969,7 +969,7 @@ static void drawTabPopups() {
   }
 }
 
-// Settings -> Mod placement: which tab each mod's card is on, and whether a
+// Hotkeys -> Placement: which tab each mod's card is on, and whether a
 // binding is a menu, a toggle or a hotkey only. cardsStamp changes whenever
 // the menu rebuilds `actions`.
 static void drawPlacementSettings(const std::vector<Action> &actions, unsigned cardsStamp) {
@@ -1075,9 +1075,10 @@ static void drawInterfaceSettings() {
 }
 
 static int settingsPage = 0;
-static const char *const settingsPages[] = {"Shortcuts", "Radial menu", "Mod placement", "Interface"};
+static const char *const settingsPages[] = {"Shortcuts", "Radial menu", "Interface"};
+static constexpr int settingsPageCount = IM_ARRAYSIZE(settingsPages);
 
-static void drawSettings(const std::vector<Action> &actions, unsigned cardsStamp) {
+static void drawSettings(const std::vector<Action> &actions) {
   const float u = UI::scale;
   // A controller combination is taken whichever page is showing.
   if (const unsigned taken = recordPadShortcut(padShortcutRecording)) {
@@ -1087,11 +1088,11 @@ static void drawSettings(const std::vector<Action> &actions, unsigned cardsStamp
     (padRecordingRadial ? padRadialRow : padOpenerRow).proposed = enough ? taken : 0;
     padRecordingRadial = false;
   }
-  if (previewMode && previewTab >= 65536)
-    settingsPage = previewTab - 65536;
+  if (previewMode && previewTab >= settingsPreview && previewTab < placementPreview)
+    settingsPage = previewTab - settingsPreview;
 
   ImGui::BeginChild("SettingsPages", ImVec2(120 * u, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_NavFlattened);
-  for (int i = 0; i < IM_ARRAYSIZE(settingsPages); ++i)
+  for (int i = 0; i < settingsPageCount; ++i)
     if (ImGui::Selectable(settingsPages[i], settingsPage == i) && settingsPage != i) {
       settingsPage = i;
       stopRecording();
@@ -1107,9 +1108,6 @@ static void drawSettings(const std::vector<Action> &actions, unsigned cardsStamp
   case 1:
     drawRadialSettings(actions);
     break;
-  case 2:
-    drawPlacementSettings(actions, cardsStamp);
-    break;
   default:
     drawInterfaceSettings();
     break;
@@ -1120,4 +1118,47 @@ static void drawSettings(const std::vector<Action> &actions, unsigned cardsStamp
     ImGui::TextWrapped("%s", settingsStatus.c_str());
   }
   ImGui::EndChild();
+}
+
+// The Hotkeys tab: every binding with its shortcut, or where each card goes.
+static int hotkeysView = 0; // 0 bindings, 1 placement
+
+// One button of a two-way switch, filled when it is the one showing.
+static bool viewButton(const char *label, bool chosen) {
+  if (chosen)
+    ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_HeaderActive));
+  const bool pressed = ImGui::Button(label);
+  if (chosen)
+    ImGui::PopStyleColor();
+  return pressed && !chosen;
+}
+
+static void drawHotkeysTab(const std::vector<Action> &actions, unsigned cardsStamp) {
+  if (previewMode)
+    hotkeysView = previewTab == placementPreview ? 1 : 0;
+  ImGui::Spacing();
+  const auto pick = [](int view) {
+    hotkeysView = view;
+    stopRecording();
+    settingsStatus.clear();
+  };
+  if (viewButton("Bindings", hotkeysView == 0))
+    pick(0);
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("Every binding, its keys, conflicts and Send.");
+  ImGui::SameLine(0, ImGui::GetStyle().ItemInnerSpacing.x);
+  if (viewButton("Placement", hotkeysView == 1))
+    pick(1);
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("Which tab each mod's card is on, and whether it is a menu, a toggle or a hotkey.");
+  if (hotkeysView == 0) {
+    drawHotkeys();
+    return;
+  }
+  const float footer = settingsStatus.empty() ? 0.0f : ImGui::GetTextLineHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y;
+  ImGui::BeginChild("PlacementView", ImVec2(0, -footer), ImGuiChildFlags_NavFlattened);
+  drawPlacementSettings(actions, cardsStamp);
+  ImGui::EndChild();
+  if (!settingsStatus.empty())
+    ImGui::TextDisabled("%s", settingsStatus.c_str());
 }
