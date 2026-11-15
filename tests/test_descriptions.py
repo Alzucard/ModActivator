@@ -76,7 +76,15 @@ mine = 'commented.ini|menu|hotkey'
 (root / 'ModActivator.ini').write_text(
     '[BindingNames]\ncombined.ini|menu|hotkey=' + 'Not read'.encode().hex() + '\n')
 
-modules = ';'.join(['PrivateStorageAnywhere.asi', 'DynamicScalify.asi', 'Combined.asi',
+# Mods that say what they do only in their own file: a version resource, a
+# config template, a settings schema, a log line, and a poller whose strings
+# say enabled/disabled. Read from disk, never loaded.
+for name in ['BinaryMod.asi', 'BinaryToggle.asi']:
+    shutil.copy2(pathlib.Path('build') / name, root / name)
+(root / 'BinaryMod.ini').write_text('[General]\nTemplateKey=F6\nPanelKey=F7\nPhotoKey=F8\n')
+(root / 'BinaryToggle.ini').write_text('[General]\nHelperKey=F6\n')
+
+modules = ';'.join(['BinaryMod.asi', 'BinaryToggle.asi', 'PrivateStorageAnywhere.asi', 'DynamicScalify.asi', 'Combined.asi',
                     'Commented.asi', 'Preset.asi', 'Nested.asi', 'ReadmeMod.asi', dll.name,
                     'Compass.asi', 'Flagless.asi', 'Linked.asi', 'Unrelated.asi',
                     'Boxed.asi', 'Names.asi', 'ModActivator.asi'])
@@ -160,6 +168,23 @@ assert row['source'] == MOD and row['name'] == 'Exported name' and row['feature'
 assert row['description'] == 'Described by the mod itself.', row
 assert rows[dll.stem + '.ini', 'Hotkeys', 'OtherKey']['source'] == COMMENT
 print('PASS: the mod export names, describes and classifies its binding.')
+
+BINARY = 6
+row = rows['BinaryMod.ini', 'General', 'TemplateKey']
+assert row['source'] == BINARY and row['description'] == 'Opens the template window.', row
+assert row['mod'] == 'Binary Fixture' and row['menu'] == 120, row
+row = rows['BinaryMod.ini', 'General', 'PanelKey']
+assert row['source'] == BINARY and row['menu'] == 120, row
+assert row['description'].startswith('Key to open or close the binary panel'), row
+assert 'Shows every fixture setting at once.' in row['description'], row
+row = rows['BinaryMod.ini', 'General', 'PhotoKey']
+assert row['source'] == BINARY and row['description'] == 'Snapshot saved to the log folder (PhotoKey).', row
+assert ('BinaryMod.ini', 'General', 'Volume') not in rows
+print("PASS: a mod's file names it and describes its keys: template, schema, then a sentence; complaints skipped.")
+
+row = rows['BinaryToggle.ini', 'General', 'HelperKey']
+assert row['feature'] == 120 and row['menu'] != 120, row
+print('PASS: a single key read by a poller that reports enabled/disabled is a toggle.')
 
 known_root = pathlib.Path('build/known-mods-test').resolve()
 shutil.rmtree(known_root, ignore_errors=True)

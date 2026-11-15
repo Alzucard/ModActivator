@@ -167,6 +167,8 @@ struct BindingComment {
 };
 using BindingComments = std::map<std::pair<std::string, std::string>, BindingComment>;
 
+static BindingComments bindingCommentsFromText(const std::string &content, bool textIsUtf8,
+                                               bool keysAreAnsi, bool anySection);
 static BindingComments readBindingComments(const std::filesystem::path &path) {
   std::ifstream file(path, std::ios::binary | std::ios::ate);
   if (!file || file.tellg() > 1024 * 1024 || file.tellg() < 0)
@@ -197,6 +199,14 @@ static BindingComments readBindingComments(const std::filesystem::path &path) {
     // No BOM: UTF-8 when it decodes as UTF-8, the ANSI code page otherwise.
     textIsUtf8 = validUtf8(content);
   }
+  return bindingCommentsFromText(content, textIsUtf8, keysAreAnsi, false);
+}
+
+// The comments in config text: the comment lines above each setting, and the
+// one after its value. anySection keeps settings above the first section,
+// under section "", as in default config text built into a mod.
+static BindingComments bindingCommentsFromText(const std::string &content, bool textIsUtf8,
+                                               bool keysAreAnsi, bool anySection) {
   const auto text = [&](const std::string &s) { return textIsUtf8 ? s : displayText(s); };
   const auto name = [&](const std::string &s) {
     return keysAreAnsi ? convertText(s, CP_UTF8, CP_ACP) : s;
@@ -224,7 +234,7 @@ static BindingComments readBindingComments(const std::filesystem::path &path) {
       description.clear();
     } else {
       const auto equals = line.find('=');
-      if (equals != line.npos && !section.empty()) {
+      if (equals != line.npos && (anySection || !section.empty())) {
         const auto inlineComment = bindingComment(line, equals + 1);
         const auto note = inlineComment == line.npos
                               ? std::string{}
@@ -244,6 +254,15 @@ static BindingComments readBindingComments(const std::filesystem::path &path) {
   return comments;
 }
 
+// Whether a comment says its shortcut opens a window. It looks for the action
+// and its object together: a mention of a menu alone could describe where a
+// gameplay shortcut works.
+static bool opensInterface(const std::string &hint) {
+  static const std::regex pattern(
+      R"(\b(?:open(?:s|/close)?(?:\s+(?:or|and)\s+close[sd]?)?|close[sd]?|show[s]?(?:\s+(?:or|and)\s+hide[s]?)?|hide[s]?|toggle[s]?)\s+(?:(?:the|a|an|its|this|your)\s+)?(?:[\w'-]+\s+){0,2}(?:menu|gui|ui|window|panel|overlay|wiki|journal|interface)\b)",
+      std::regex::icase | std::regex::optimize);
+  return std::regex_search(hint, pattern);
+}
 static void classifyBinding(Action &action, const BindingComments &comments) {
   const auto comment = comments.find({lower(action.section), lower(action.key)});
   action.description = comment == comments.end() ? "" : comment->second.description;
@@ -258,13 +277,7 @@ static void classifyBinding(Action &action, const BindingComments &comments) {
   action.menuRank = uiRank(action.section, action.key);
   action.featureRank = toggleRank(action.section, action.key);
 
-  // Look for the action and its object together. A mention of a menu alone
-  // could describe where a gameplay shortcut works.
-  static const std::regex opensInterface(
-      R"(\b(?:open(?:s|/close)?|close[sd]?|show[s]?|hide[s]?|toggle[s]?)\s+(?:(?:the|a|an|mod|settings|in-game|in game)\s+)*(?:menu|gui|ui|window|panel|overlay|wiki|journal|interface)\b)",
-      std::regex::icase | std::regex::optimize);
-  if (comment != comments.end() &&
-      std::regex_search(comment->second.classificationHint, opensInterface)) {
+  if (comment != comments.end() && opensInterface(comment->second.classificationHint)) {
     action.menuRank = 120;
     action.featureRank = 0;
   }
@@ -293,6 +306,7 @@ static bool representableInAnsi(const std::wstring &wide) {
                                     (int)wide.size(), nullptr, 0, nullptr, &lossy);
   return n > 0 && !lossy;
 }
+#include "binary_info.h"
 #include "descriptions.h"
 static std::string moduleFor(const std::filesystem::path &rel,
                              const std::vector<std::string> &mods,
@@ -426,6 +440,22 @@ static std::vector<Action> scanBindings(const std::vector<std::string> &mods,
         }
       }
     }
+  }
+  // A mod with one shortcut: the words in its code that reads the keyboard
+  // say what the shortcut does, where nothing stronger has ("Weather control
+  // enabled" for a toggle, "editor opened" for a menu).
+  std::map<std::string, int> perModule;
+  for (const auto &a : found)
+    ++perModule[lower(a.module)];
+  for (auto &a : found) {
+    if (perModule[lower(a.module)] != 1 || a.chosenKind || a.typeOverride || a.menuRank == 120)
+      continue;
+    const BinaryInfo *binary = sources.binaryFor(a.module, {});
+    if (!binary || !binary->kindHint)
+      continue;
+    a.menuRank = binary->kindHint == 1 ? 120 : 0;
+    a.featureRank = binary->kindHint == 2 ? 120 : 0;
+    a.toggle = a.featureRank > 0;
   }
   std::sort(found.begin(), found.end(), [](const Action &a, const Action &b) {
     const auto am = lower(a.module), bm = lower(b.module);

@@ -346,6 +346,34 @@ extern "C" __declspec(dllexport) int
 ModActivatorToggleDiscoveryTest(const char *root, const char *modules, char *out, int capacity) {
   return discoveryReport(root, modules, out, capacity, true);
 }
+// Whether ModActivatorDescribeTest uses the known-mods list, so a test can
+// see what a mod's own files say about it.
+extern "C" __declspec(dllexport) void ModActivatorUseKnownModsTest(int use) {
+  testsIgnoreKnownMods = !use;
+}
+// What a mod's file says about one setting:
+// product|about|kind hint|template|schema|sentence|template count|schema count
+extern "C" __declspec(dllexport) int ModActivatorBinaryInfoTest(const wchar_t *path, const char *section,
+                                                                 const char *key, char *out, int capacity) {
+  if (!path || !section || !key || !out || capacity < 1)
+    return -1;
+  const auto info = binaryInfo(path);
+  if (!info)
+    return -2;
+  auto it = info->templates.find({lower(section), lower(key)});
+  if (it == info->templates.end())
+    it = info->templates.find({"", lower(key)});
+  auto report = info->product + "|" + info->about + "|" + std::to_string(info->kindHint) + "|" +
+                (it == info->templates.end() ? "" : it->second.description) + "|" +
+                binarySchemaText(*info, section, key) + "|" + binarySentence(*info, key) + "|" +
+                std::to_string(info->templates.size()) + "|" + std::to_string(info->schema.size());
+  for (size_t at; (at = report.find('\n')) != report.npos;)
+    report.replace(at, 1, "\\n");
+  if ((int)report.size() >= capacity)
+    return -3;
+  memcpy(out, report.c_str(), report.size() + 1);
+  return (int)report.size();
+}
 // Every binding found, with what the description sources made of it:
 // file|section|key|vk,..|name|mod name|source|menu rank|feature rank|description
 // (newlines in descriptions written as \n).

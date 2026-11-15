@@ -60,13 +60,16 @@ Several comment lines in a row are kept together; a blank line ends them. UTF-8 
 
 A readme next to the config (`MyMod readme.txt`, `MyMod.md`) is used when there is no comment: the line naming the setting, such as `MenuKey = Ctrl+F7 - opens the window`. In `bin64` itself only a readme named after the mod counts; in the mod's own folder any `readme*` does.
 
+ModActivator also reads (never loads) your `.asi`: the default config text you write when none exists, with its comments; a JSON settings schema with `label` and `help` (or `description`) per key, where an `"en"` text is preferred; your version resource's `ProductName` and `FileDescription`; and, last of all, a sentence that names the setting, such as `Snapshot saved (PhotoKey).` Keep those texts in your binary as plain strings and new users get descriptions before you are in the known-mods list.
+
 ### Menu, toggle or action
 
 ModActivator puts each mod's menu shortcut on its **Mod menus** tab, toggles on **Toggles**, and everything on **Hotkeys**. It decides from:
 
 - the name: `MenuKey`, `SettingsWindowHotkey`, `UIHotkey` or `WindowHotkey` open a menu, and so do `Hotkey`, `Key`, `ToggleKey` or `OpenKey` in a section called `Menu`, `UI`, `Interface`, `Window` or `SettingsWindow`, and `ActivationKeyVK` under `General` or `Settings`;
 - `ToggleKey`, `ToggleHotkey`, `HotkeyToggleEffect` and `ToggleEffectKey` elsewhere are toggles;
-- the comment: "Opens the menu", "Show the settings window", "Toggles the overlay" and the like make it a menu;
+- the comment, or the text in your binary: "Opens the menu", "Show the settings window", "Open or close the debug panel" and the like make it a menu;
+- for a mod with one shortcut, the strings used by the code that polls the keyboard or controller and what it calls: "enabled"/"disabled" or ON/OFF make a toggle, "opened"/"closed" a menu;
 - names with `Stance`, `Mode`, `Cycle`, `Capture`, `Screenshot` and similar are gameplay actions.
 
 When the guess is wrong, the export (step 2) or the known-mods list (step 3) settles it, and users can correct it in Settings.

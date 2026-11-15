@@ -7,8 +7,11 @@
 //      (see include/ModActivatorBindings.h)
 //   3. the known-mods list, built into the plugin from
 //      data/ModActivator.KnownMods.ini
-//   4. the comment beside the setting in the mod's config file
+//   4. the comment beside the setting in the mod's config file, or else
+//      the default config text or settings schema built into the mod's own
+//      file (see binary_info.h)
 //   5. a readme next to the mod's config file
+//   6. a sentence in the mod's own file that names the setting
 //
 // Names fall back to what the setting's key is called, and the menu says
 // where each description came from.
@@ -21,6 +24,7 @@ enum DescriptionSource {
   sourceKnownMods,
   sourceMod,
   sourceUser,
+  sourceBinary, // ranks below sourceComment; numbered last so the others keep their numbers
 };
 
 static const char *sourceLabel(int source) {
@@ -30,6 +34,7 @@ static const char *sourceLabel(int source) {
   case sourceKnownMods: return "From ModActivator's list of known mods";
   case sourceMod: return "From the mod itself";
   case sourceUser: return "Your note";
+  case sourceBinary: return "From the mod's file";
   }
   return "";
 }
@@ -181,7 +186,15 @@ static KnownMods parseKnownMods(const std::string &text) {
 // list does not know, and reserved keys. So a mod author can try an entry
 // before sending it in, while the copy 1.3.2 to 1.3.4 left in bin64, which is
 // older than the list built in, can never replace what is there.
+#ifdef MODACTIVATOR_TESTS
+// Set by the tests to see mods as ModActivator sees one it has never heard of.
+static bool testsIgnoreKnownMods = false;
+#endif
 static KnownMods loadKnownMods() {
+#ifdef MODACTIVATOR_TESTS
+  if (testsIgnoreKnownMods)
+    return {};
+#endif
   auto mods = parseKnownMods(builtInKnownMods);
   std::ifstream file(configPath("ModActivator.KnownMods.ini"), std::ios::binary);
   if (!file)
@@ -475,6 +488,7 @@ struct DescriptionSources {
   KnownMods known = loadKnownMods();
   std::map<std::string, std::vector<ModExport>> exports; // by lower-case module
   std::map<std::string, std::vector<std::string>> readmes; // by folder and module
+  std::map<std::string, std::shared_ptr<const BinaryInfo>> binaries; // by lower-case module
 
   const std::vector<ModExport> &exportsFor(const std::string &module) {
     const auto key = lower(module);
@@ -498,6 +512,34 @@ struct DescriptionSources {
     }
     return it->second;
   }
+  // What the mod's file says: the loaded module's file, or for a mod not
+  // loaded, a file of that name beside the config file or in bin64.
+  const BinaryInfo *binaryFor(const std::string &module, const std::filesystem::path &config) {
+    const auto key = lower(module);
+    auto it = binaries.find(key);
+    if (it == binaries.end()) {
+      std::shared_ptr<const BinaryInfo> info;
+      const auto extension = lower(std::filesystem::path(module).extension().string());
+      if (extension == ".asi" || extension == ".addon64") {
+        std::vector<std::filesystem::path> paths;
+        if (const HMODULE loaded = GetModuleHandleA(module.c_str())) {
+          wchar_t path[MAX_PATH * 4]{};
+          const DWORD n = GetModuleFileNameW(loaded, path, (DWORD)std::size(path));
+          if (n && n < std::size(path))
+            paths.emplace_back(path);
+        }
+        paths.push_back(config.parent_path() / module);
+        paths.push_back(std::filesystem::path(folder) / module);
+        for (const auto &path : paths) {
+          std::error_code ec;
+          if (std::filesystem::is_regular_file(path, ec) && (info = binaryInfo(path)))
+            break;
+        }
+      }
+      it = binaries.emplace(key, std::move(info)).first;
+    }
+    return it->second.get();
+  }
 };
 
 // The kind a source gave, unless you chose one in Settings.
@@ -517,23 +559,54 @@ static void describeBinding(Action &action, DescriptionSources &sources,
   const KnownBinding *known = mod ? knownBindingFor(*mod, action.section, action.key) : nullptr;
   const ModExport *own = exportFor(sources.exportsFor(action.module), action);
   const auto user = userInfo(action);
+  const BinaryInfo *binary = sources.binaryFor(action.module, config);
   if (mod) {
     action.modName = mod->name;
     action.modAbout = mod->about;
     action.hexNumbers = mod->hexNumbers;
     action.reload = mod->reload;
   }
+  if (binary && action.modName.empty())
+    action.modName = binary->product;
+  if (binary && action.modAbout.empty())
+    action.modAbout = binary->about;
   if (known) {
     action.modifierRule = known->modifiers;
     action.padField = known->padField;
   }
   if (!action.description.empty())
     action.descriptionSource = sourceComment;
+  // Default config text or a settings schema built into the mod reads like
+  // the config file's own comments, so it can say the shortcut opens a
+  // window as they do.
+  if (action.description.empty() && binary) {
+    auto it = binary->templates.find({lower(action.section), lower(action.key)});
+    if (it == binary->templates.end())
+      it = binary->templates.find({"", lower(action.key)});
+    std::string hint;
+    if (it != binary->templates.end()) {
+      action.description = it->second.description;
+      hint = it->second.classificationHint;
+    } else {
+      hint = action.description = binarySchemaText(*binary, action.section, action.key);
+    }
+    if (!action.description.empty())
+      action.descriptionSource = sourceBinary;
+    if (!action.typeOverride && action.menuRank != 120 && opensInterface(hint)) {
+      action.menuRank = 120;
+      action.featureRank = 0;
+    }
+  }
   // Weakest first, so each stronger source replaces what it has.
   if (action.description.empty()) {
     action.description = readmeDescription(sources.readmesFor(config, action.module), action.key);
     if (!action.description.empty())
       action.descriptionSource = sourceReadme;
+  }
+  if (action.description.empty() && binary) {
+    action.description = binarySentence(*binary, action.key);
+    if (!action.description.empty())
+      action.descriptionSource = sourceBinary;
   }
   for (const auto &[info, source] : {std::pair<const BindingInfo *, int>{known ? &known->info : nullptr, sourceKnownMods},
                                      {own ? &own->info : nullptr, sourceMod},

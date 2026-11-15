@@ -125,6 +125,16 @@ subprocess.run([str(tc / 'x86_64-w64-mingw32-clang++.exe'), '-shared', '-static'
                 str(example / 'ExampleMod.cpp'), '-luser32'], check=True)
 print('Built ' + str(obj / 'ExampleMod.asi'))
 
+# Two test mods that are only read, never loaded: tests/test_descriptions.py
+# checks what ModActivator learns from a mod's file alone.
+fixtures = base / 'tests/fixtures'
+subprocess.run([str(tc / 'x86_64-w64-mingw32-windres.exe'), '-O', 'coff', '-o', str(obj / 'BinaryMod.res.o'),
+                str(fixtures / 'BinaryMod.rc')], check=True)
+for name, extra in [('BinaryMod', [str(obj / 'BinaryMod.res.o')]), ('BinaryToggle', ['-DBINARY_TOGGLE'])]:
+    subprocess.run([str(tc / 'x86_64-w64-mingw32-clang++.exe'), '-shared', '-static', '-O2', '-std=c++17',
+                    '-o', str(obj / (name + '.asi')), str(fixtures / 'BinaryMod.cpp')] + extra, check=True)
+print('Built ' + str(obj / 'BinaryMod.asi') + ' and ' + str(obj / 'BinaryToggle.asi'))
+
 # The two release archives, named for VERSION.
 #   ModActivator-<version>.zip            the mod, laid out from the game folder
 #                                         (bin64\...), as users and DMM install it

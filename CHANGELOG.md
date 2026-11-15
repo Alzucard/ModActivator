@@ -11,6 +11,9 @@
 - Fix **Send** in the Hotkeys tab: its row took the click.
 - Add **Settings → Interface → UI size** (80 to 150 %, `UISize`) on top of the size the resolution gives the panel.
 - The radial menu keeps its own larger text, read at a glance over the game.
+- Read what a mod's own `.asi` or `.addon64` says about its shortcuts, for mods ModActivator has never seen: the default config it writes, with its comments; a settings schema's labels and help texts; its version information for the mod's name; and, as the weakest source, a sentence naming the setting. The file is only read, never run. Descriptions from it say **From the mod's file**.
+- For a mod with a single shortcut, the text near the code that reads the keyboard or controller decides whether it is a menu or a toggle when nothing else does.
+- "Opens or closes …", "Shows or hides the … window" and a word or two before *menu*, *window* or *panel* now count as opening a menu.
 
 ## 1.3.5
 - Build the known-mods list into `ModActivator.asi`. DMM does not install `ModActivator.KnownMods.ini`, so DMM installs had no names or descriptions for popular mods and no Steam and Windows key conflicts. A `ModActivator.KnownMods.ini` beside the plugin is still read, but only adds config files the built-in list does not know (and reserved keys), so the copy 1.3.2 to 1.3.4 left in `bin64` cannot override the newer list.
