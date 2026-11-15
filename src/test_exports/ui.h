@@ -151,6 +151,92 @@ extern "C" __declspec(dllexport) int ModActivatorDragTest(const char *root) {
   return result;
 }
 
+// Dragging a tab moves it and saves the order; a new tab then joins at the
+// end, before the +.
+extern "C" __declspec(dllexport) int ModActivatorTabDragTest(const char *root) {
+  if (!folder.empty() || !root)
+    return -1;
+  folder = root;
+  auto *context = ImGui::CreateContext();
+  auto &io = ImGui::GetIO();
+  io.DisplaySize = ImVec2(1000, 860);
+  io.DeltaTime = 1.0f / 60;
+  io.IniFilename = nullptr;
+  ml::gui::InitStyle(1.0f);
+  unsigned char *pixels;
+  int width, height;
+  io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+  modLayout = {};
+  modLayout.tabs[3] = "Mine";
+  ++layoutVersion;
+  previewMode = true;
+  previewTab = 0;
+  ml::State::Get().menuOpen = true;
+  const auto frame = [] {
+    ImGui::NewFrame();
+    ml::gui::Render();
+    ImGui::Render();
+  };
+  const auto findBar = [&]() -> ImGuiTabBar * {
+    for (int i = 0; i < context->TabBars.GetMapSize(); ++i)
+      if (auto *bar = context->TabBars.TryGetMapData(i); bar && bar->Tabs.Size)
+        return bar;
+    return nullptr;
+  };
+  // Where the tab at `index` (in the bar's order) is drawn, at its height.
+  const auto tabAt = [&](ImGuiTabBar *bar, int index, float along) {
+    const auto &tab = bar->Tabs[index];
+    return ImVec2(bar->BarRect.Min.x + tab.Offset + tab.Width * along - bar->ScrollingAnim,
+                  bar->BarRect.GetCenter().y);
+  };
+  frame();
+  frame();
+  int result = 1;
+  if (auto *bar = findBar(); bar && bar->Tabs.Size == 5) {
+    // Hotkeys (third) to the far left, a few pixels at a time as a hand does.
+    const ImVec2 from = tabAt(bar, 2, 0.5f), to = tabAt(bar, 0, 0.1f);
+    io.AddMousePosEvent(from.x, from.y);
+    frame();
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    frame();
+    for (int step = 1; step <= 20; ++step) {
+      io.AddMousePosEvent(from.x + (to.x - from.x) * step / 20, from.y);
+      frame();
+    }
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    frame();
+    frame();
+    modLayout = {};
+    ++layoutVersion;
+    loadLayout();
+    const auto tabs = orderedTabs(modLayout);
+    result = tabs.size() == 4 && tabs[0].first == 2 && tabs[1].first == 0 && tabs[2].first == 1 &&
+                     tabs[3].first == 3
+                 ? 0
+                 : 2;
+    if (!result) {
+      // A new tab: after Mine, before the +.
+      modLayout.tabs[4] = "New";
+      ++layoutVersion;
+      frame();
+      frame();
+      frame();
+      bar = findBar();
+      const auto last = [&](int fromEnd) { return bar->Tabs[bar->Tabs.Size - 1 - fromEnd]; };
+      if (!bar || bar->Tabs.Size != 6 || !(last(0).Flags & ImGuiTabItemFlags_Button) ||
+          last(1).ID != ImGui::GetIDWithSeed("###Category4", nullptr, bar->ID))
+        result = 3;
+    }
+  }
+  modLayout = {};
+  ++layoutVersion;
+  folder.clear();
+  previewMode = false;
+  ml::State::Get().menuOpen = false;
+  ImGui::DestroyContext(context);
+  return result;
+}
+
 // Send in Hotkeys takes the click: the row's selectable spans the Send
 // column, and without AllowOverlap it took every click there.
 extern "C" __declspec(dllexport) int ModActivatorSendTest() {

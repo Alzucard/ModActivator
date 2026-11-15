@@ -69,7 +69,7 @@ Symbolic shortcuts map by physical key position and display the key label for th
 
 ## Custom tabs and panel shortcut
 
-Click **+** after the tabs, enter a name and press Enter. Right-click one of your tabs to **Rename** or **Delete** it. Use the **Tab** column in **Hotkeys → Placement** to move a mod to Mod menus, Toggles, or any custom tab. The **Show as** column controls how the binding is classified. Its action stays the same. Drag the handle on a mod card to reorder it within its tab. Deleting a tab returns its mods to their default tabs. Changes are saved in ModActivator.User.ini.
+Click **+** after the tabs, enter a name and press Enter. Right-click one of your tabs to **Rename** or **Delete** it. Drag any tab, built-in ones too, left or right to put the tabs in your order. Use the **Tab** column in **Hotkeys → Placement** to move a mod to Mod menus, Toggles, or any custom tab. The **Show as** column controls how the binding is classified. Its action stays the same. Drag the handle on a mod card to reorder it within its tab. Deleting a tab returns its mods to their default tabs. Changes are saved in ModActivator.User.ini.
 
 In **Settings → Shortcuts**, click **Record** beside **Keyboard**, press the new keys, check what they overlap and click **Save**: the shortcut changes at once. **Default** proposes Ctrl+Shift+Backspace again.
 

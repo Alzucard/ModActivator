@@ -7,6 +7,8 @@ struct ModPlacement {
 struct ModLayout {
   std::map<int, std::string> tabs;
   std::vector<ModPlacement> placements;
+  // Every tab left to right, as you dragged them; empty for the default.
+  std::vector<int> order;
 };
 static ModLayout modLayout;
 // Bumped whenever modLayout changes, so the menu re-sorts its cards then and
@@ -302,7 +304,16 @@ static void loadLayout() {
     if (eq < 2 || eq == line.npos)
       continue;
     const auto index = strtoul(line.c_str() + 1, nullptr, 10);
-    if (line[0] == 'T' && index >= firstCustomTab && index < 65536) {
+    if (!line.compare(0, eq, "Order")) {
+      for (const char *at = line.c_str() + eq + 1; *at;) {
+        char *end = nullptr;
+        const long id = strtol(at, &end, 10);
+        if (end == at)
+          break;
+        loaded.order.push_back((int)id);
+        at = *end == ',' ? end + 1 : end;
+      }
+    } else if (line[0] == 'T' && index >= firstCustomTab && index < 65536) {
       auto name = unhexText(line.substr(eq + 1));
       if (!name.empty())
         loaded.tabs[(int)index] = std::move(name);
@@ -324,6 +335,12 @@ static bool saveLayout(ModLayout next) {
   std::string section;
   for (const auto &[id, name] : next.tabs)
     section += "T" + std::to_string(id) + "=" + hexText(name) + '\0';
+  if (!next.order.empty()) {
+    section += "Order=";
+    for (size_t i = 0; i < next.order.size(); ++i)
+      section += (i ? "," : "") + std::to_string(next.order[i]);
+    section += ' ';
+  }
   size_t index = 0;
   for (const auto &place : next.placements)
     section += "M" + std::to_string(index++) + "=" + std::to_string(place.tab) +
@@ -335,6 +352,22 @@ static bool saveLayout(ModLayout next) {
   modLayout = std::move(next);
   ++layoutVersion;
   return true;
+}
+// The tabs left to right: Mod menus, Toggles, Hotkeys and yours, in the
+// order you dragged them, with any tab missing from it (a new one) last.
+static std::vector<std::pair<int, std::string>> orderedTabs(const ModLayout &layout) {
+  std::map<int, std::string> all{{0, "Mod menus"}, {1, "Toggles"}, {2, "Hotkeys"}};
+  all.insert(layout.tabs.begin(), layout.tabs.end());
+  std::vector<std::pair<int, std::string>> result;
+  for (const int id : layout.order) {
+    const auto found = all.find(id);
+    if (found != all.end()) {
+      result.emplace_back(*found);
+      all.erase(found);
+    }
+  }
+  result.insert(result.end(), all.begin(), all.end());
+  return result;
 }
 static int assignedTab(const std::string &binding) {
   for (const auto &place : modLayout.placements)
@@ -924,6 +957,7 @@ static void drawTabPopups() {
   if (remove) {
     auto next = modLayout;
     next.tabs.erase(remove);
+    next.order.erase(std::remove(next.order.begin(), next.order.end(), remove), next.order.end());
     for (auto &place : next.placements)
       if (place.tab == remove)
         place.tab = 0;

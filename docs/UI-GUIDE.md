@@ -27,7 +27,7 @@ not a TV menu.
   close.
 - **Tabs:** Mod menus, Toggles, Hotkeys, your own tabs, then a **+** to add
   one. Hotkeys switches between Bindings and Placement (which tab each card
-  goes on). Right-click one of your tabs to rename or delete it,
+  goes on). Drag a tab to move it; the order is saved. Right-click one of your tabs to rename or delete it,
   in a small popup, never a Settings page.
 - **Settings:** the button beside Refresh shows it in place of the tabs, until
   pressed again. A list of pages on the left, one topic per page: Shortcuts,

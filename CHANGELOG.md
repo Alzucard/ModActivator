@@ -5,6 +5,7 @@
 - Settings has a **Radial menu** section: the hold key and controller combination (with conflict checks), the order of the eight entries, and what the game does while the ring is open: keeps running, slows down, or freezes. Slowing and freezing use the game's own speed control, found the way Trinity finds it; if a game update moved it, the option says so and the ring works without it.
 - Count the radial menu's key and combination as ModActivator's own in the conflict checks.
 - Make the panel smaller and denser, sized like ReShade's or OptiScaler's for a PC monitor: 14 px text at 1080p, tighter spacing, one line per mod card, and the name, search, Refresh and close on one line at the top.
+- Drag tabs left or right to order them, the built-in ones too. The order is saved in ModActivator.User.ini.
 - Move **Settings** from the tabs to a button beside Refresh, and split it into pages listed on the left: Shortcuts, Radial menu and Interface. Mod placement is now **Placement** in the Hotkeys tab. Every shortcut row looks the same: the current keys, then Record, Default and Off.
 - Add your own tabs with the **+** after the tabs, and rename or delete one with a right click on it, instead of in Settings.
 - Fix **Send** in the Hotkeys tab: its row took the click.

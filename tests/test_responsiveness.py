@@ -18,6 +18,13 @@ with TemporaryDirectory(dir='build') as tmp:
     assert result == 0, f'Drag-and-drop regression check failed at step {result}'
 print("PASS: mouse drag reorders cards, saves the result, and supports moving back up.")
 
+with TemporaryDirectory(dir='build') as tmp:
+    drag = m.ModActivatorTabDragTest
+    drag.argtypes = [ctypes.c_char_p]
+    result = drag((str(pathlib.Path(tmp).resolve()) + '\\').encode())
+    assert result == 0, f'Tab drag regression check failed at step {result}'
+print("PASS: dragging a tab moves it and saves the order; a new tab joins before the +.")
+
 result = m.ModActivatorSendTest()
 assert result == 0, f'Send in Hotkeys did not take the click (step {result})'
 print("PASS: Send in Hotkeys takes the click over its row.")

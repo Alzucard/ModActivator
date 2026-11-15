@@ -1098,8 +1098,7 @@ static void renderPanel() {
       ImGui::SetTooltip("Close (%s)", shortcutLabel(openerKeys()).c_str());
     const auto &snap = menuSnapshot();
     const auto &actions = snap.actions;
-    std::map<int, std::string> tabs{{0, "Mod menus"}, {1, "Toggles"}, {2, "Hotkeys"}};
-    tabs.insert(modLayout.tabs.begin(), modLayout.tabs.end());
+    const auto tabs = orderedTabs(modLayout);
     const auto &counts = snap.counts;
     if (settingsOpen) {
       // LB and RB step through its pages here.
@@ -1112,9 +1111,23 @@ static void renderPanel() {
       ImGui::Spacing();
       drawSettings(actions);
     } else if (ImGui::BeginTabBar("Categories",
-                           ImGuiTabBarFlags_NoCloseWithMiddleMouseButton |
+                           ImGuiTabBarFlags_NoCloseWithMiddleMouseButton | ImGuiTabBarFlags_Reorderable |
                                ImGuiTabBarFlags_FittingPolicyScroll)) {
       static int lastTab = -1;
+      // Dragging a tab reorders the bar's own list. Before it lays the tabs
+      // out, that list is put in the saved order (a new tab joins at the end,
+      // before the +); after them, a drag shows as a different order there,
+      // which is saved once the bar is done.
+      ImGuiTabBar *bar = ImGui::GetCurrentTabBar();
+      std::map<ImGuiID, int> rank;
+      for (size_t i = 0; i < tabs.size(); ++i)
+        rank[ImGui::GetID(("###Category" + std::to_string(tabs[i].first)).c_str())] = int(i);
+      const auto rankOf = [&](const ImGuiTabItem &item) {
+        const auto found = rank.find(item.ID);
+        return found == rank.end() ? INT_MAX : found->second; // the + and closed tabs last
+      };
+      std::stable_sort(bar->Tabs.Data, bar->Tabs.Data + bar->Tabs.Size,
+                       [&](const ImGuiTabItem &a, const ImGuiTabItem &b) { return rankOf(a) < rankOf(b); });
       // LB and RB on their own step through the tabs.
       int padTab = -1;
       if (padTabStep && !tabs.empty()) {
@@ -1270,8 +1283,21 @@ static void renderPanel() {
       }
       // The + comes after your own tabs.
       newTabButton();
+      std::vector<int> dragged;
+      for (const auto &item : bar->Tabs)
+        if (const int at = rankOf(item); at != INT_MAX)
+          dragged.push_back(tabs[at].first);
       ImGui::EndTabBar();
       tabToSelect = 0;
+      const bool moved = dragged.size() == tabs.size() &&
+                         !std::equal(dragged.begin(), dragged.end(), tabs.begin(),
+                                     [](int id, const auto &tab) { return id == tab.first; });
+      if (moved) {
+        auto next = modLayout;
+        next.order = std::move(dragged);
+        if (!saveLayout(std::move(next)))
+          LOG_ERR("[menu] could not save the tab order to ModActivator.User.ini.");
+      }
     }
     drawTabPopups();
   }
