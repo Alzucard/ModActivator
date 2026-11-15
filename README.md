@@ -10,10 +10,10 @@ The panel uses a charcoal-and-gold theme with larger text, searchable mod cards,
 
 - **Mod UIs:** each loaded mod's detected menu shortcut, plus a card for every shortcut you, the mod or the known-mods list marks as a menu.
 - **Toggles:** a card for every toggle, in the same way. The panel stays open when sending a toggle. State is labeled **State unavailable** where a mod has no live-state interface.
-- **Hotkeys:** expand a mod to see its shortcuts, their controller buttons, and what each one does, with your own names and notes. **Send** presses any shortcut right away. Capture new key combinations in a single field, or let **Pick a free key** find one, with config backups. Exact conflicts are red; shared base keys with different modifiers are amber, and keys Steam or Windows already use count too. **Placement** chooses each mod's tab and corrects its binding type.
+- **Hotkeys:** the button beside **Settings**. Expand a mod to see its shortcuts, their controller buttons, and what each one does, with your own names and notes. **Send** presses any shortcut right away. Capture new key combinations in a single field, or let **Pick a free key** find one, with config backups. Exact conflicts are red; shared base keys with different modifiers are amber, and keys Steam or Windows already use count too. **Placement** chooses each mod's tab and corrects its binding type.
 - **Radial menu:** pin up to eight mod menus and toggles, then hold a key, aim and let go to open one, without opening the panel. See below.
 - **Controller:** open the panel with a button combination, move with the d-pad or left stick, press with A, back out with B, and change tab with LB or RB on their own.
-- **Settings:** the button beside **Refresh**: the panel and radial menu shortcuts, what the game does while the ring is open, and the UI size.
+- **Settings:** the button beside **Refresh**. The tabs stay above Hotkeys and Settings; click one to go back. The panel and radial menu shortcuts, what the game does while the ring is open, and the UI size.
 - **On-demand discovery:** scans when the panel opens, when you click **Refresh**, and after saving an edit. No periodic five-second scan.
 - Config reads and conflict calculations are cached outside normal menu rendering.
 

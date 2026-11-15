@@ -31,6 +31,10 @@ static int previewTab = 0;
 // previewTab past the tabs: a Settings page (settingsPreview + page), or
 // Hotkeys showing Placement.
 static constexpr int settingsPreview = 65536, placementPreview = 1 << 20;
+// What shows below the tabs: the chosen tab, or Hotkeys or Settings from the
+// buttons beside Refresh.
+enum { viewTabs, viewHotkeys, viewSettings };
+static int panelView = viewTabs;
 // The plugin's folder (bin64), where the mods and their configs are.
 static std::string folder;
 // ModActivator's INI files (its settings, your choices and the known-mods
@@ -1056,36 +1060,43 @@ static void renderPanel() {
   if (ImGui::Begin("ModActivator##Main", &open,
                    ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
                        ImGuiWindowFlags_NoScrollbar)) {
-    // One line: name, version, search, Settings, Refresh and close.
+    // One line: name, version, search, Hotkeys, Settings, Refresh and close.
     ImGui::AlignTextToFramePadding();
     ImGui::TextColored(UI::gold, "MODACTIVATOR");
     ImGui::SameLine();
     ImGui::TextDisabled("%s", MODACTIVATOR_VERSION);
     ImGui::SameLine();
     const float frame = ImGui::GetFrameHeight();
-    const float buttons = ImGui::CalcTextSize("Settings").x + ImGui::CalcTextSize("Refresh").x +
-                          ImGui::GetStyle().FramePadding.x * 4;
+    const float buttons = ImGui::CalcTextSize("Hotkeys").x + ImGui::CalcTextSize("Settings").x +
+                          ImGui::CalcTextSize("Refresh").x + ImGui::GetStyle().FramePadding.x * 6;
     const float spacing = ImGui::GetStyle().ItemSpacing.x;
-    ImGui::SetNextItemWidth((std::max)(120 * u, ImGui::GetContentRegionAvail().x - buttons - frame - spacing * 3));
+    ImGui::SetNextItemWidth((std::max)(120 * u, ImGui::GetContentRegionAvail().x - buttons - frame - spacing * 4));
     if (ImGui::InputTextWithHint("##Search", "Search mods or shortcuts...",
                                  UI::search, sizeof UI::search))
       UI::noteGlyphs(std::string(UI::search)); // typed text can be in any script
-    ImGui::SameLine();
-    // Settings takes the place of the tabs until it is pressed again.
-    static bool settingsOpen = false;
+    // Hotkeys and Settings show below the tabs until pressed again or a tab
+    // is clicked.
     if (previewMode)
-      settingsOpen = previewTab >= settingsPreview && previewTab < placementPreview;
-    if (settingsOpen)
-      ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_HeaderActive));
-    if (ImGui::Button("Settings")) {
-      settingsOpen = !settingsOpen;
-      stopRecording();
-      settingsStatus.clear();
-    }
-    if (settingsOpen)
-      ImGui::PopStyleColor();
-    if (ImGui::IsItemHovered())
-      ImGui::SetTooltip("%s", settingsOpen ? "Back to your mods." : "Shortcuts, the radial menu and the panel's size.");
+      panelView = previewTab == 2 || previewTab == placementPreview ? viewHotkeys
+                  : previewTab >= settingsPreview && previewTab < placementPreview ? viewSettings
+                                                                                    : viewTabs;
+    const auto viewButton = [&](const char *label, int view, const char *tip) {
+      ImGui::SameLine();
+      const bool on = panelView == view;
+      if (on)
+        ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_HeaderActive));
+      if (ImGui::Button(label)) {
+        panelView = on ? viewTabs : view;
+        stopRecording();
+        settingsStatus.clear();
+      }
+      if (on)
+        ImGui::PopStyleColor();
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", on ? "Back to your mods." : tip);
+    };
+    viewButton("Hotkeys", viewHotkeys, "Every shortcut of every mod, conflicts, Send and Placement.");
+    viewButton("Settings", viewSettings, "Shortcuts, the radial menu and the panel's size.");
     ImGui::SameLine();
     if (ImGui::Button("Refresh"))
       refreshRequested.store(true);
@@ -1100,17 +1111,22 @@ static void renderPanel() {
     const auto &actions = snap.actions;
     const auto tabs = orderedTabs(modLayout);
     const auto &counts = snap.counts;
-    if (settingsOpen) {
-      // LB and RB step through its pages here.
-      if (padTabStep) {
-        settingsPage = (settingsPage + padTabStep + settingsPageCount) % settingsPageCount;
-        padTabStep = 0;
-        stopRecording();
-        settingsStatus.clear();
-      }
-      ImGui::Spacing();
-      drawSettings(actions);
-    } else if (ImGui::BeginTabBar("Categories",
+    // In Settings LB and RB step through its pages; in Hotkeys they go back
+    // to a tab, like clicking one does.
+    if (panelView == viewSettings && padTabStep) {
+      settingsPage = (settingsPage + padTabStep + settingsPageCount) % settingsPageCount;
+      padTabStep = 0;
+      stopRecording();
+      settingsStatus.clear();
+    }
+    // Over Hotkeys or Settings the bar stays, with no tab drawn as chosen.
+    const bool overView = panelView != viewTabs;
+    if (overView) {
+      ImGui::PushStyleColor(ImGuiCol_TabSelected, ImGui::GetStyleColorVec4(ImGuiCol_Tab));
+      ImGui::PushStyleColor(ImGuiCol_TabSelectedOverline, ImGui::GetStyleColorVec4(ImGuiCol_Tab));
+      ImGui::PushStyleColor(ImGuiCol_TabDimmedSelected, ImGui::GetStyleColorVec4(ImGuiCol_TabDimmed));
+    }
+    if (ImGui::BeginTabBar("Categories",
                            ImGuiTabBarFlags_NoCloseWithMiddleMouseButton | ImGuiTabBarFlags_Reorderable |
                                ImGuiTabBarFlags_FittingPolicyScroll)) {
       static int lastTab = -1;
@@ -1141,23 +1157,29 @@ static void renderPanel() {
       }
       for (const auto &[tab, name] : tabs) {
         const auto counted = counts.find(tab);
-        const std::string count = tab == 2
-                                      ? "" : "  " + std::to_string(counted == counts.end() ? 0 : counted->second);
+        const std::string count = "  " + std::to_string(counted == counts.end() ? 0 : counted->second);
         const std::string title = name + count + "###Category" + std::to_string(tab);
+        const bool chosen = padTab == tab || (tabToSelect && tabToSelect == tab);
         const bool shown = ImGui::BeginTabItem(
             title.c_str(), nullptr,
-            (previewMode && (previewTab == placementPreview ? 2 : previewTab) == tab) || padTab == tab || (tabToSelect && tabToSelect == tab)
-                ? ImGuiTabItemFlags_SetSelected
-                : 0);
+            (previewMode && previewTab == tab) || chosen ? ImGuiTabItemFlags_SetSelected : 0);
+        const bool clicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
         if (tab >= firstCustomTab)
           tabContextClick(tab);
+        // Clicking a tab, the chosen one too, or picking one with the pad
+        // or a new +, leaves Hotkeys or Settings for it.
+        if (panelView != viewTabs && !previewMode &&
+            (clicked || chosen || (shown && lastTab != -1 && lastTab != tab))) {
+          panelView = viewTabs;
+          stopRecording();
+          settingsStatus.clear();
+        }
         if (shown) {
           if (lastTab != tab) {
             stopRecording();
             lastTab = tab;
           }
-          if (tab == 2) {
-            drawHotkeysTab(actions, snap.stamp);
+          if (panelView != viewTabs) {
             ImGui::EndTabItem();
             continue;
           }
@@ -1299,6 +1321,12 @@ static void renderPanel() {
           LOG_ERR("[menu] could not save the tab order to ModActivator.User.ini.");
       }
     }
+    if (overView)
+      ImGui::PopStyleColor(3);
+    if (panelView == viewHotkeys)
+      drawHotkeysTab(actions, snap.stamp);
+    else if (panelView == viewSettings)
+      drawSettings(actions);
     drawTabPopups();
   }
   // A mod menu opened from a card, or from Send in Hotkeys, closes the panel

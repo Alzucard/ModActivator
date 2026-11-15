@@ -353,10 +353,12 @@ static bool saveLayout(ModLayout next) {
   ++layoutVersion;
   return true;
 }
-// The tabs left to right: Mod menus, Toggles, Hotkeys and yours, in the
-// order you dragged them, with any tab missing from it (a new one) last.
+// The tabs left to right: Mod menus, Toggles and yours, in the order you
+// dragged them, with any tab missing from it (a new one) last. Hotkeys is a
+// button beside Settings, not a tab; an order saved while it was one still
+// lists 2, which is passed over.
 static std::vector<std::pair<int, std::string>> orderedTabs(const ModLayout &layout) {
-  std::map<int, std::string> all{{0, "Mod menus"}, {1, "Toggles"}, {2, "Hotkeys"}};
+  std::map<int, std::string> all{{0, "Mod menus"}, {1, "Toggles"}};
   all.insert(layout.tabs.begin(), layout.tabs.end());
   std::vector<std::pair<int, std::string>> result;
   for (const int id : layout.order) {

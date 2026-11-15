@@ -192,8 +192,8 @@ extern "C" __declspec(dllexport) int ModActivatorTabDragTest(const char *root) {
   frame();
   frame();
   int result = 1;
-  if (auto *bar = findBar(); bar && bar->Tabs.Size == 5) {
-    // Hotkeys (third) to the far left, a few pixels at a time as a hand does.
+  if (auto *bar = findBar(); bar && bar->Tabs.Size == 4) {
+    // Mine (third) to the far left, a few pixels at a time as a hand does.
     const ImVec2 from = tabAt(bar, 2, 0.5f), to = tabAt(bar, 0, 0.1f);
     io.AddMousePosEvent(from.x, from.y);
     frame();
@@ -210,10 +210,7 @@ extern "C" __declspec(dllexport) int ModActivatorTabDragTest(const char *root) {
     ++layoutVersion;
     loadLayout();
     const auto tabs = orderedTabs(modLayout);
-    result = tabs.size() == 4 && tabs[0].first == 2 && tabs[1].first == 0 && tabs[2].first == 1 &&
-                     tabs[3].first == 3
-                 ? 0
-                 : 2;
+    result = tabs.size() == 3 && tabs[0].first == 3 && tabs[1].first == 0 && tabs[2].first == 1 ? 0 : 2;
     if (!result) {
       // A new tab: after Mine, before the +.
       modLayout.tabs[4] = "New";
@@ -223,11 +220,36 @@ extern "C" __declspec(dllexport) int ModActivatorTabDragTest(const char *root) {
       frame();
       bar = findBar();
       const auto last = [&](int fromEnd) { return bar->Tabs[bar->Tabs.Size - 1 - fromEnd]; };
-      if (!bar || bar->Tabs.Size != 6 || !(last(0).Flags & ImGuiTabItemFlags_Button) ||
+      if (!bar || bar->Tabs.Size != 5 || !(last(0).Flags & ImGuiTabItemFlags_Button) ||
           last(1).ID != ImGui::GetIDWithSeed("###Category4", nullptr, bar->ID))
         result = 3;
     }
+    // Hotkeys and Settings keep the tabs above them; clicking one goes back.
+    previewMode = false;
+    for (const int view : {viewHotkeys, viewSettings}) {
+      if (result)
+        break;
+      panelView = view;
+      frame();
+      frame();
+      bar = findBar();
+      if (!bar || bar->Tabs.Size != 5 || panelView != view) {
+        result = 4;
+        break;
+      }
+      const ImVec2 at = tabAt(bar, 1, 0.5f);
+      io.AddMousePosEvent(at.x, at.y);
+      frame();
+      io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+      frame();
+      io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+      frame();
+      frame();
+      if (panelView != viewTabs)
+        result = 5;
+    }
   }
+  panelView = viewTabs;
   modLayout = {};
   ++layoutVersion;
   folder.clear();
