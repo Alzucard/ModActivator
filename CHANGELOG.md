@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.4.0
 - Add a **radial menu**. Pin up to eight mod menus and toggles to it with the new ring button on their cards, then hold the key left of 1 (`` ` ``, `^` on German keyboards), aim with the mouse and let go to open the one you pointed at. On a controller, hold LB + RB + D-pad Up and aim with the right stick. Letting go in the middle, or pressing Escape, closes it without doing anything. The camera stays still while it is open.
 - Settings has a **Radial menu** page: the hold key and controller combination (with conflict checks), the order of the eight entries, and what the game does while the ring is open: keeps running, slows down, or freezes. Slowing and freezing use the game's own speed control, found the way Trinity finds it; if a game update moved it, the option says so and the ring works without it. The ring keeps its own larger text, to be read at a glance over the game.
 - Count the radial menu's key and combination as ModActivator's own in the conflict checks.
