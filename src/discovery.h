@@ -256,10 +256,12 @@ static BindingComments bindingCommentsFromText(const std::string &content, bool 
 
 // Whether a comment says its shortcut opens a window. It looks for the action
 // and its object together: a mention of a menu alone could describe where a
-// gameplay shortcut works.
+// gameplay shortcut works. Opening takes a word or two before the object
+// ("opens the template window"); showing, hiding and toggling do not, as
+// "Toggle photo mode UI" switches the HUD rather than opening anything.
 static bool opensInterface(const std::string &hint) {
   static const std::regex pattern(
-      R"(\b(?:open(?:s|/close)?(?:\s+(?:or|and)\s+close[sd]?)?|close[sd]?|show[s]?(?:\s+(?:or|and)\s+hide[s]?)?|hide[s]?|toggle[s]?)\s+(?:(?:the|a|an|its|this|your)\s+)?(?:[\w'-]+\s+){0,2}(?:menu|gui|ui|window|panel|overlay|wiki|journal|interface)\b)",
+      R"(\b(?:(?:open(?:s|/close)?(?:\s+(?:or|and)\s+close[sd]?)?|close[sd]?)\s+(?:(?:the|a|an|its|this|your)\s+)?(?:[\w'-]+\s+){0,2}|(?:show[s]?(?:\s+(?:or|and)\s+hide[s]?)?|hide[s]?|toggle[s]?)\s+(?:(?:the|a|an|mod|settings|in-game|in game)\s+)*)(?:menu|gui|ui|window|panel|overlay|wiki|journal|interface)\b)",
       std::regex::icase | std::regex::optimize);
   return std::regex_search(hint, pattern);
 }
@@ -442,13 +444,14 @@ static std::vector<Action> scanBindings(const std::vector<std::string> &mods,
     }
   }
   // A mod with one shortcut: the words in its code that reads the keyboard
-  // say what the shortcut does, where nothing stronger has ("Weather control
-  // enabled" for a toggle, "editor opened" for a menu).
+  // say what the shortcut does, where nothing stronger has, not even the
+  // setting's name ("Weather control enabled" for a toggle, "editor opened"
+  // for a menu).
   std::map<std::string, int> perModule;
   for (const auto &a : found)
     ++perModule[lower(a.module)];
   for (auto &a : found) {
-    if (perModule[lower(a.module)] != 1 || a.chosenKind || a.typeOverride || a.menuRank == 120)
+    if (perModule[lower(a.module)] != 1 || a.chosenKind || a.typeOverride || a.menuRank || a.featureRank)
       continue;
     const BinaryInfo *binary = sources.binaryFor(a.module, {});
     if (!binary || !binary->kindHint)

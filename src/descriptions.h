@@ -490,6 +490,14 @@ struct DescriptionSources {
   std::map<std::string, std::vector<std::string>> readmes; // by folder and module
   std::map<std::string, std::shared_ptr<const BinaryInfo>> binaries; // by lower-case module
 
+  // At the end of the scan, what new or changed mods said goes to disk.
+  ~DescriptionSources() {
+    try {
+      binary_cache::save();
+    } catch (...) {
+    }
+  }
+
   const std::vector<ModExport> &exportsFor(const std::string &module) {
     const auto key = lower(module);
     auto it = exports.find(key);
@@ -559,7 +567,16 @@ static void describeBinding(Action &action, DescriptionSources &sources,
   const KnownBinding *known = mod ? knownBindingFor(*mod, action.section, action.key) : nullptr;
   const ModExport *own = exportFor(sources.exportsFor(action.module), action);
   const auto user = userInfo(action);
-  const BinaryInfo *binary = sources.binaryFor(action.module, config);
+  // The mod's file is read only for what nothing stronger gives: its name and
+  // about text, and a description and kind where the comment, the database
+  // and the mod's export all leave them out.
+  const auto settles = [](const BindingInfo *info) {
+    return info && !info->description.empty() && info->kind > 0;
+  };
+  const bool needBinary = !mod || mod->name.empty() || mod->about.empty() ||
+                          (action.description.empty() && !settles(known ? &known->info : nullptr) &&
+                           !settles(own ? &own->info : nullptr));
+  const BinaryInfo *binary = needBinary ? sources.binaryFor(action.module, config) : nullptr;
   if (mod) {
     action.modName = mod->name;
     action.modAbout = mod->about;
@@ -580,13 +597,10 @@ static void describeBinding(Action &action, DescriptionSources &sources,
   // the config file's own comments, so it can say the shortcut opens a
   // window as they do.
   if (action.description.empty() && binary) {
-    auto it = binary->templates.find({lower(action.section), lower(action.key)});
-    if (it == binary->templates.end())
-      it = binary->templates.find({"", lower(action.key)});
     std::string hint;
-    if (it != binary->templates.end()) {
-      action.description = it->second.description;
-      hint = it->second.classificationHint;
+    if (const auto *comment = binaryTemplate(*binary, action.section, action.key)) {
+      action.description = comment->description;
+      hint = comment->classificationHint;
     } else {
       hint = action.description = binarySchemaText(*binary, action.section, action.key);
     }

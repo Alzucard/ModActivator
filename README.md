@@ -28,6 +28,7 @@ bin64\
   ModActivator.User.ini            your menu choices, created when you first save one
   ModActivator\
     ModActivator.log               this session's log (and .log.old, the last one)
+    ModActivator.ModCache.bin      what each mod's file said, safe to delete
     README.md, LICENSE, ...        documentation and licences (manual installs)
 ```
 
@@ -54,7 +55,7 @@ Each binding's name and description come from the most trustworthy source that h
 1. **Your own name and note.** Select a binding in **Hotkeys**, fill in **Name** and **Note**, and click **Save name and note**. They take effect at once and are saved in `ModActivator.User.ini`, so updating ModActivator or the mod never replaces them. **Clear mine** goes back to the other sources.
 2. **The mod itself**, for mods that describe their shortcuts to ModActivator (see below).
 3. **The known-mods list**, built into `ModActivator.asi` (its source is `data/ModActivator.KnownMods.ini`): what the shortcuts of about 50 popular Crimson Desert mods do, written from their Nexus Mods pages and config files. It also tells ModActivator about settings whose names do not look like shortcuts (and ones that only look like shortcuts), about mods that write key codes in hexadecimal, and about modifiers a mod keeps in a setting of its own, such as Gilded Compass's `HotkeyCtrl=1`, so the full combination is sent. It is built into the plugin because DMM does not install it as a file of its own, and it is replaced with every update; put your own changes in your notes instead. A `ModActivator.KnownMods.ini` beside the plugin is still read, but only adds config files the built-in list does not know, and reserved keys.
-4. **The comment** beside the setting in the mod's config file, or **the mod's own file** (`.asi` or `.addon64`), when it carries the default config it writes or a settings schema with a label and help text for the setting. ModActivator only reads the file, it never runs anything from it, and this works for mods it has never heard of. The file's version information also names the mod when nothing else does.
+4. **The comment** beside the setting in the mod's config file, or **the mod's own file** (`.asi` or `.addon64`), when it carries the default config it writes or a settings schema with a label and help text for the setting. ModActivator only reads the file, it never runs anything from it, and this works for mods it has never heard of. The file's version information also names the mod when nothing else does. What a mod's file said is kept in `ModActivator\ModActivator.ModCache.bin`, so each file is read once and again only when the mod is new or updated (its size or date changed) or ModActivator itself is updated.
 5. **A readme** next to the mod's config file: a `.txt` or `.md` file named `readme…` or after the mod.
 6. **A sentence in the mod's own file** that names the setting, such as a log message. Error messages are skipped.
 

@@ -194,3 +194,15 @@ known.argtypes = [ctypes.c_char_p]
 result = known((str(known_root) + '\\').encode())
 assert result == 0, f'Known-mods check failed at step {result}'
 print('PASS: the known-mods list is built in; a file beside the plugin only adds to it.')
+
+# What a mod's file said is kept on disk until the mod changes.
+assert (root / 'ModActivator' / 'ModActivator.ModCache.bin').exists(), 'the scan wrote no mod cache'
+cache_root = pathlib.Path('build/mod-cache-test').resolve()
+shutil.rmtree(cache_root, ignore_errors=True)
+cache_root.mkdir(parents=True)
+shutil.copy2(pathlib.Path('build') / 'BinaryMod.asi', cache_root / 'BinaryMod.asi')
+cache = m.ModActivatorModCacheTest
+cache.argtypes = [ctypes.c_char_p, ctypes.c_wchar_p]
+result = cache((str(cache_root) + '\\').encode(), str(cache_root / 'BinaryMod.asi'))
+assert result == 0, f'Mod cache check failed at step {result}'
+print("PASS: a mod's file is read once, kept on disk, and read again only when it changes.")

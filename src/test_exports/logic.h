@@ -360,11 +360,9 @@ extern "C" __declspec(dllexport) int ModActivatorBinaryInfoTest(const wchar_t *p
   const auto info = binaryInfo(path);
   if (!info)
     return -2;
-  auto it = info->templates.find({lower(section), lower(key)});
-  if (it == info->templates.end())
-    it = info->templates.find({"", lower(key)});
+  const auto *comment = binaryTemplate(*info, section, key);
   auto report = info->product + "|" + info->about + "|" + std::to_string(info->kindHint) + "|" +
-                (it == info->templates.end() ? "" : it->second.description) + "|" +
+                (comment ? comment->description : std::string()) + "|" +
                 binarySchemaText(*info, section, key) + "|" + binarySentence(*info, key) + "|" +
                 std::to_string(info->templates.size()) + "|" + std::to_string(info->schema.size());
   for (size_t at; (at = report.find('\n')) != report.npos;)
@@ -373,6 +371,89 @@ extern "C" __declspec(dllexport) int ModActivatorBinaryInfoTest(const wchar_t *p
     return -3;
   memcpy(out, report.c_str(), report.size() + 1);
   return (int)report.size();
+}
+// The cache on disk: a mod is read once, what it said comes back from the
+// file after a restart, and it is read again when it changes, when the cache
+// is damaged, and is left out once the mod is gone. path is a copy of a mod
+// in root that the test may change and delete. 0 when all of that holds.
+extern "C" __declspec(dllexport) int ModActivatorModCacheTest(const char *root, const wchar_t *path) {
+  if (!folder.empty() || !root || !path)
+    return -1;
+  folder = root;
+  using namespace binary_cache;
+  const auto restart = [] {
+    std::lock_guard<std::mutex> lock(mutex);
+    entries.clear();
+    loaded = dirty = false;
+    loadedFrom.clear();
+  };
+  const auto same = [](const BinaryInfo &a, const BinaryInfo &b) {
+    return serialise({{L"x", {1, 1, std::make_shared<BinaryInfo>(a)}}}) ==
+           serialise({{L"x", {1, 1, std::make_shared<BinaryInfo>(b)}}});
+  };
+  const int result = [&] {
+    // No data folder: nothing is written.
+    restart();
+    if (!binaryInfo(path))
+      return 1;
+    save();
+    if (!file().empty())
+      return 2;
+    ensureDataFolder();
+    restart();
+    const auto cache = file();
+    DeleteFileA(cache.c_str());
+    auto before = analyses;
+    const auto first = binaryInfo(path);
+    if (!first || analyses != before + 1 || first->product.empty())
+      return 3;
+    save();
+    if (!std::filesystem::exists(cache))
+      return 4;
+    // After a restart it comes from the file, the same as it was read.
+    restart();
+    before = analyses;
+    const auto again = binaryInfo(path);
+    if (!again || analyses != before || !same(*first, *again))
+      return 5;
+    // A damaged cache is read past: the mod is analysed again.
+    std::ofstream(cache, std::ios::binary | std::ios::trunc) << "MAMODC1\nbroken";
+    restart();
+    before = analyses;
+    if (!binaryInfo(path) || analyses != before + 1)
+      return 6;
+    save();
+    // An updated mod, here only its date, is read again.
+    restart();
+    std::error_code ec;
+    std::filesystem::last_write_time(path, std::filesystem::last_write_time(path, ec) + std::chrono::seconds(5), ec);
+    before = analyses;
+    if (ec || !binaryInfo(path) || analyses != before + 1)
+      return 7;
+    save();
+    restart();
+    before = analyses;
+    if (!binaryInfo(path) || analyses != before)
+      return 8;
+    // A mod that is gone is left out when the cache is next written.
+    std::filesystem::remove(path, ec);
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      dirty = true;
+    }
+    save();
+    restart();
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      loadLocked();
+      if (!entries.empty())
+        return 9;
+    }
+    return 0;
+  }();
+  restart();
+  folder.clear();
+  return result;
 }
 // Every binding found, with what the description sources made of it:
 // file|section|key|vk,..|name|mod name|source|menu rank|feature rank|description

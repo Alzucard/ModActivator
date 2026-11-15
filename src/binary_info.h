@@ -13,7 +13,8 @@
 //     and "disabled" there say a shortcut switches something on and off,
 //     "opened" and "closed" that it opens a window.
 //
-// Each file is read once per size and modification time.
+// Each file is read once per size and modification time, and what it said is
+// kept on disk in ModActivator.ModCache.bin until the mod changes.
 #include <unordered_map>
 #include <unordered_set>
 
@@ -153,13 +154,19 @@ static std::string versionString(const Image &img, const char *key) {
   for (const char *c = key; *c; ++c)
     pattern += *c, pattern += '\0';
   pattern += std::string(2, '\0');
-  const auto at = img.d.find(pattern, start);
+  // A String block: wLength, wValueLength (in characters), wType, the key.
+  auto at = img.d.find(pattern, start);
+  while (at != img.d.npos && at < end && (at < start + 6 || (at - start) % 2))
+    at = img.d.find(pattern, at + 1);
   if (at == img.d.npos || at >= end)
+    return {};
+  uint16_t valueLength = 0;
+  if (!img.get(at - 4, valueLength) || !valueLength)
     return {};
   size_t v = at + pattern.size();
   v += (4 - (v - start) % 4) % 4;
   std::wstring text;
-  for (; v + 1 < end && text.size() < 512; v += 2) {
+  for (; v + 1 < end && text.size() < std::min<size_t>(valueLength, 512); v += 2) {
     const wchar_t c = wchar_t((unsigned char)img.d[v] | ((unsigned char)img.d[v + 1] << 8));
     if (!c)
       break;
@@ -210,6 +217,29 @@ static Strings strings(const Image &img) {
   return out;
 }
 
+// Whether s holds a word that reads as a setting's name: five or more letters,
+// digits and underscores, with an underscore or a capital after a small
+// letter (StanceCycleKey, toggle_key).
+static bool namesSetting(const std::string &s) {
+  const auto wordChar = [](char c) { return std::isalnum((unsigned char)c) || c == '_'; };
+  for (size_t i = 0; i < s.size();) {
+    if (!wordChar(s[i])) {
+      ++i;
+      continue;
+    }
+    size_t j = i;
+    bool shaped = false;
+    for (; j < s.size() && wordChar(s[j]); ++j)
+      if (j > i && (s[j] == '_' || (std::isupper((unsigned char)s[j]) &&
+                                    std::islower((unsigned char)s[j - 1]))))
+        shaped = true;
+    if (shaped && j - i >= 5)
+      return true;
+    i = j;
+  }
+  return false;
+}
+
 static bool readsAsWords(const std::string &s, size_t minimum) {
   if (s.size() < minimum || s.find(' ') == s.npos)
     return false;
@@ -255,9 +285,17 @@ struct JsonParser {
       case 'u': {
         if (p + 4 >= s.size())
           return false;
-        const wchar_t w = (wchar_t)std::strtoul(s.substr(p + 1, 4).c_str(), nullptr, 16);
-        out += narrowText(&w, 1, CP_UTF8);
+        wchar_t w[2] = {(wchar_t)std::strtoul(s.substr(p + 1, 4).c_str(), nullptr, 16), 0};
         p += 4;
+        // A character past U+FFFF comes as a surrogate pair, 😀.
+        if (w[0] >= 0xD800 && w[0] < 0xDC00 && p + 6 < s.size() && s[p + 1] == '\\' && s[p + 2] == 'u') {
+          w[1] = (wchar_t)std::strtoul(s.substr(p + 3, 4).c_str(), nullptr, 16);
+          if (w[1] >= 0xDC00 && w[1] < 0xE000)
+            p += 6;
+          else
+            w[1] = 0;
+        }
+        out += narrowText(w, w[1] ? 2 : 1, CP_UTF8);
         break;
       }
       default: out += c;
@@ -380,6 +418,7 @@ static int inputKind(const Image &img, const Strings &strs) {
   // RIP-relative operands: the ModRM byte's mod 00 r/m 101, then 32 bits.
   std::vector<std::pair<uint32_t, uint32_t>> stringRefs; // site, string
   std::vector<uint32_t> inputSites;
+  std::unordered_set<uint32_t> thunks;
   for (const auto &s : img.sections) {
     if (!(s.flags & executable))
       continue;
@@ -393,10 +432,29 @@ static int inputKind(const Image &img, const Strings &strs) {
       if (const auto it = strs.at.find(target); it != strs.at.end())
         stringRefs.emplace_back(site, it->second);
       else if (slots.count(target) &&
-               ((unsigned char)d[o - 2] == 0xFF || (unsigned char)d[o - 2] == 0x8B))
+               ((unsigned char)d[o - 2] == 0xFF || (unsigned char)d[o - 2] == 0x8B)) {
         inputSites.push_back(site);
+        // jmp [rip+slot]: an import thunk, as MinGW links them.
+        if ((unsigned char)d[o - 2] == 0xFF && (unsigned char)d[o - 1] == 0x25)
+          thunks.insert(site - 2);
+      }
     }
   }
+  // Calls to a thunk read input as much as calls through the slot do.
+  if (!thunks.empty())
+    for (const auto &s : img.sections) {
+      if (!(s.flags & executable))
+        continue;
+      for (size_t o = s.raw; o + 5 <= size_t(s.raw) + s.rawSize; ++o) {
+        if ((unsigned char)d[o] != 0xE8)
+          continue;
+        int32_t rel;
+        memcpy(&rel, d.data() + o + 1, 4);
+        const uint32_t site = s.va + uint32_t(o - s.raw);
+        if (thunks.count(uint32_t(int64_t(site) + 5 + rel)))
+          inputSites.push_back(site);
+      }
+    }
   std::sort(stringRefs.begin(), stringRefs.end());
   const auto functionAt = [&](uint32_t rva) -> const std::pair<uint32_t, uint32_t> * {
     auto it = std::upper_bound(funcs.begin(), funcs.end(), std::make_pair(rva, UINT32_MAX));
@@ -404,10 +462,17 @@ static int inputKind(const Image &img, const Strings &strs) {
       return nullptr;
     return &*it;
   };
-  const auto inCode = [&](uint32_t rva) {
+  // A leaf function's start, which has no .pdata entry: in code, 16-byte
+  // aligned as compilers place functions, after padding or a return. A
+  // stray 0xE8 byte read as a call rarely lands on one.
+  const auto leafStart = [&](uint32_t rva) {
+    if (rva % 16)
+      return false;
     for (const auto &s : img.sections)
-      if ((s.flags & executable) && rva >= s.va && rva - s.va < s.rawSize)
-        return true;
+      if ((s.flags & executable) && rva > s.va && rva - s.va < s.rawSize) {
+        const auto before = (unsigned char)d[size_t(s.raw) + (rva - s.va) - 1];
+        return before == 0xCC || before == 0x90 || before == 0xC3 || before == 0x00;
+      }
     return false;
   };
   std::set<std::pair<uint32_t, uint32_t>> readers, nearby;
@@ -431,7 +496,7 @@ static int inputKind(const Image &img, const Strings &strs) {
       const auto it = std::lower_bound(funcs.begin(), funcs.end(), std::make_pair(target, 0u));
       if (it != funcs.end() && it->first == target)
         nearby.insert(*it);
-      else if (!functionAt(target) && inCode(target))
+      else if (!functionAt(target) && leafStart(target))
         // A leaf function has no .pdata entry: it runs to the next one.
         nearby.insert({target, it == funcs.end() ? target + 0x400 : std::min(it->first, target + 0x400)});
     }
@@ -480,7 +545,9 @@ static std::shared_ptr<BinaryInfo> analyse(const std::string &data) {
         schemaEntries(root, path, info->schema);
       }
     }
-    if (readsAsWords(s, 10) && info->texts.size() < 60000)
+    // Only sentences that could name a setting are kept, as each mod's
+    // analysis stays cached for the session.
+    if (readsAsWords(s, 10) && namesSetting(s) && info->texts.size() < 60000)
       info->texts.push_back(s.size() > 4000 ? s.substr(0, 4000) : s);
   }
   info->kindHint = inputKind(img, strs);
@@ -489,11 +556,215 @@ static std::shared_ptr<BinaryInfo> analyse(const std::string &data) {
 
 } // namespace binary
 
-// The analysis of the file at path, from the cache while the file is unchanged.
+// --- the cache on disk -------------------------------------------------------
+// What each mod's file said, kept in ModActivator.ModCache.bin in the data
+// folder so a mod is read again only when it is new or its size or date
+// changed. Each entry holds the file's path, size and date. The cache belongs
+// to one build of ModActivator: another build may read files differently, so
+// it starts afresh.
+namespace binary_cache {
+
+struct Entry {
+  uintmax_t size = 0;
+  int64_t time = 0;
+  std::shared_ptr<const BinaryInfo> info;
+};
+
+inline std::mutex mutex;
+inline std::map<std::wstring, Entry> entries; // by the file's full path
+inline std::string loadedFrom;                // the cache file entries came from
+inline bool loaded = false, dirty = false;
+inline unsigned long analyses = 0;            // files read and analysed, for the tests
+constexpr char magic[8] = {'M', 'A', 'M', 'O', 'D', 'C', '1', '\n'};
+inline const std::string build = MODACTIVATOR_VERSION " " __DATE__ " " __TIME__;
+
+struct Writer {
+  std::string out;
+  void u64(uint64_t v) { out.append((const char *)&v, 8); }
+  void str(const std::string &s) {
+    u64(s.size());
+    out += s;
+  }
+  void strs(const std::vector<std::string> &v) {
+    u64(v.size());
+    for (const auto &s : v)
+      str(s);
+  }
+};
+
+struct Reader {
+  const std::string &d;
+  size_t at = 0;
+  bool ok = true;
+  uint64_t u64() {
+    uint64_t v = 0;
+    if (d.size() - at < 8)
+      ok = false;
+    else
+      memcpy(&v, d.data() + at, 8);
+    at += ok ? 8 : 0;
+    return v;
+  }
+  // A count of items that each take at least one byte, so a damaged file
+  // cannot ask for more than it holds.
+  uint64_t count() {
+    const auto n = u64();
+    if (n > d.size() - at)
+      ok = false;
+    return ok ? n : 0;
+  }
+  std::string str() {
+    const auto n = count();
+    std::string s = ok ? d.substr(at, size_t(n)) : std::string();
+    at += size_t(n);
+    return s;
+  }
+  std::vector<std::string> strs() {
+    const auto n = static_cast<size_t>(count());
+    std::vector<std::string> v(n);
+    for (auto &s : v)
+      s = str();
+    return v;
+  }
+};
+
+inline std::string pathText(const std::wstring &path) {
+  return std::string((const char *)path.data(), path.size() * sizeof(wchar_t));
+}
+
+inline std::string serialise(const std::map<std::wstring, Entry> &all) {
+  Writer w;
+  w.out.append(magic, sizeof magic);
+  w.str(build);
+  w.u64(all.size());
+  for (const auto &[path, e] : all) {
+    const BinaryInfo &info = *e.info;
+    w.str(pathText(path));
+    w.u64(e.size);
+    w.u64(uint64_t(e.time));
+    w.str(info.product);
+    w.str(info.about);
+    w.u64(info.templates.size());
+    for (const auto &[key, comment] : info.templates) {
+      w.str(key.first);
+      w.str(key.second);
+      w.str(comment.description);
+      w.str(comment.classificationHint);
+    }
+    w.u64(info.schema.size());
+    for (const auto &entry : info.schema) {
+      w.str(entry.key);
+      w.strs(entry.path);
+      w.str(entry.text);
+    }
+    w.strs(info.texts);
+    w.u64(uint64_t(int64_t(info.kindHint)));
+  }
+  return w.out;
+}
+
+// The entries in data, or none when it is damaged or from another build.
+inline std::map<std::wstring, Entry> parse(const std::string &data) {
+  std::map<std::wstring, Entry> all;
+  if (data.size() < sizeof magic || data.compare(0, sizeof magic, magic, sizeof magic) != 0)
+    return all;
+  Reader r{data, sizeof magic};
+  if (r.str() != build || !r.ok)
+    return all;
+  for (auto n = r.count(); n && r.ok; --n) {
+    const auto raw = r.str();
+    std::wstring path(raw.size() / sizeof(wchar_t), L'\0');
+    memcpy(path.data(), raw.data(), path.size() * sizeof(wchar_t));
+    Entry e;
+    e.size = r.u64();
+    e.time = int64_t(r.u64());
+    auto info = std::make_shared<BinaryInfo>();
+    info->product = r.str();
+    info->about = r.str();
+    for (auto t = r.count(); t && r.ok; --t) {
+      auto section = r.str();
+      auto key = r.str();
+      BindingComment comment;
+      comment.description = r.str();
+      comment.classificationHint = r.str();
+      info->templates.emplace(std::make_pair(std::move(section), std::move(key)), std::move(comment));
+    }
+    for (auto s = r.count(); s && r.ok; --s) {
+      BinaryInfo::SchemaEntry entry;
+      entry.key = r.str();
+      entry.path = r.strs();
+      entry.text = r.str();
+      info->schema.push_back(std::move(entry));
+    }
+    info->texts = r.strs();
+    info->kindHint = int(int64_t(r.u64()));
+    e.info = std::move(info);
+    if (r.ok)
+      all[path] = std::move(e);
+  }
+  if (!r.ok || r.at != data.size())
+    all.clear();
+  return all;
+}
+
+// The cache file, while ModActivator has its data folder: never created
+// anywhere else, such as a folder of mods it was pointed at to test.
+inline std::string file() {
+  if (folder.empty())
+    return {};
+  const DWORD attributes = GetFileAttributesA((folder + dataFolderName).c_str());
+  if (attributes == INVALID_FILE_ATTRIBUTES || !(attributes & FILE_ATTRIBUTE_DIRECTORY))
+    return {};
+  return dataPath("ModActivator.ModCache.bin");
+}
+
+// Under the lock: the entries for the current folder, read on first use.
+inline void loadLocked() {
+  const auto path = file();
+  if (loaded && path == loadedFrom)
+    return;
+  entries.clear();
+  dirty = false;
+  loaded = true;
+  loadedFrom = path;
+  if (path.empty())
+    return;
+  std::ifstream in(path, std::ios::binary);
+  if (!in)
+    return;
+  std::string data(std::istreambuf_iterator<char>(in), {});
+  entries = parse(data);
+}
+
+// Writes what changed since the cache was read, leaving out mods no longer
+// there. Replaces the file in one step, so a crash leaves the old one.
+inline void save() {
+  std::lock_guard<std::mutex> lock(mutex);
+  if (!dirty || loadedFrom.empty() || loadedFrom != file())
+    return;
+  for (auto it = entries.begin(); it != entries.end();) {
+    std::error_code ec;
+    it = std::filesystem::is_regular_file(it->first, ec) ? std::next(it) : entries.erase(it);
+  }
+  const auto temp = loadedFrom + ".tmp";
+  {
+    std::ofstream out(temp, std::ios::binary | std::ios::trunc);
+    const auto data = serialise(entries);
+    if (!out || !out.write(data.data(), data.size()))
+      return;
+  }
+  if (MoveFileExA(temp.c_str(), loadedFrom.c_str(), MOVEFILE_REPLACE_EXISTING))
+    dirty = false;
+  else
+    DeleteFileA(temp.c_str());
+}
+
+} // namespace binary_cache
+
+// The analysis of the file at path: from the cache while the file keeps its
+// size and date, read again when it changed or is new.
 static std::shared_ptr<const BinaryInfo> binaryInfo(const std::filesystem::path &path) {
-  static std::mutex mutex;
-  static std::map<std::wstring, std::tuple<uintmax_t, std::filesystem::file_time_type,
-                                           std::shared_ptr<const BinaryInfo>>> cache;
+  using namespace binary_cache;
   std::error_code ec;
   const auto size = std::filesystem::file_size(path, ec);
   if (ec || size < 0x200 || size > 64u * 1024 * 1024)
@@ -501,15 +772,17 @@ static std::shared_ptr<const BinaryInfo> binaryInfo(const std::filesystem::path 
   const auto time = std::filesystem::last_write_time(path, ec);
   if (ec)
     return nullptr;
+  const int64_t stamp = int64_t(time.time_since_epoch().count());
   {
     std::lock_guard<std::mutex> lock(mutex);
-    const auto it = cache.find(path.native());
-    if (it != cache.end() && std::get<0>(it->second) == size && std::get<1>(it->second) == time)
-      return std::get<2>(it->second);
+    loadLocked();
+    const auto it = entries.find(path.native());
+    if (it != entries.end() && it->second.size == size && it->second.time == stamp)
+      return it->second.info;
   }
-  std::ifstream file(path, std::ios::binary);
+  std::ifstream in(path, std::ios::binary);
   std::string data(size_t(size), '\0');
-  if (!file.read(data.data(), data.size()))
+  if (!in.read(data.data(), data.size()))
     return nullptr;
   std::shared_ptr<const BinaryInfo> info;
   try {
@@ -519,7 +792,9 @@ static std::shared_ptr<const BinaryInfo> binaryInfo(const std::filesystem::path 
     info = std::make_shared<BinaryInfo>();
   }
   std::lock_guard<std::mutex> lock(mutex);
-  cache[path.native()] = {size, time, info};
+  ++analyses;
+  entries[path.native()] = {size, stamp, info};
+  dirty = true;
   return info;
 }
 
@@ -594,6 +869,17 @@ static std::string binarySentence(const BinaryInfo &info, const std::string &key
       best = part, bestRank = rank;
   }
   return best.size() > 300 ? best.substr(0, 297) + "..." : best;
+}
+
+// The default config text's comment for a setting: in its section, or in
+// text that names no section, for a name long enough not to be anyone's
+// (a bundled library's "; Key=..." is not about the mod's Key).
+static const BindingComment *binaryTemplate(const BinaryInfo &info, const std::string &section,
+                                            const std::string &key) {
+  auto it = info.templates.find({lower(section), lower(key)});
+  if (it == info.templates.end() && key.size() >= 5)
+    it = info.templates.find({"", lower(key)});
+  return it == info.templates.end() ? nullptr : &it->second;
 }
 
 static std::string binarySchemaText(const BinaryInfo &info, const std::string &section,
