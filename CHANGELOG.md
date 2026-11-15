@@ -2,16 +2,16 @@
 
 ## Unreleased
 - Add a **radial menu**. Pin up to eight mod menus and toggles to it with the new ring button on their cards, then hold the key left of 1 (`` ` ``, `^` on German keyboards), aim with the mouse and let go to open the one you pointed at. On a controller, hold LB + RB + D-pad Up and aim with the right stick. Letting go in the middle, or pressing Escape, closes it without doing anything. The camera stays still while it is open.
-- Settings has a **Radial menu** section: the hold key and controller combination (with conflict checks), the order of the eight entries, and what the game does while the ring is open: keeps running, slows down, or freezes. Slowing and freezing use the game's own speed control, found the way Trinity finds it; if a game update moved it, the option says so and the ring works without it.
+- Settings has a **Radial menu** page: the hold key and controller combination (with conflict checks), the order of the eight entries, and what the game does while the ring is open: keeps running, slows down, or freezes. Slowing and freezing use the game's own speed control, found the way Trinity finds it; if a game update moved it, the option says so and the ring works without it. The ring keeps its own larger text, to be read at a glance over the game.
 - Count the radial menu's key and combination as ModActivator's own in the conflict checks.
-- Make the panel smaller and denser, sized like ReShade's or OptiScaler's for a PC monitor: 14 px text at 1080p, tighter spacing, one line per mod card, and the name, search, Refresh and close on one line at the top.
-- Drag tabs left or right to order them, the built-in ones too. The order is saved in ModActivator.User.ini.
-- Move **Hotkeys** and **Settings** from the tabs to buttons beside Refresh. The tabs stay above them; click one, or press LB or RB in Hotkeys, to go back to your mods.
-- Split Settings into pages listed on the left: Shortcuts, Radial menu and Interface. Mod placement is now **Placement** in Hotkeys. Every shortcut row looks the same: the current keys, then Record, Default and Off.
-- Add your own tabs with the **+** after the tabs, and rename or delete one with a right click on it, instead of in Settings.
-- Fix **Send** in the Hotkeys tab: its row took the click.
+- Make the panel smaller and denser, sized like ReShade's or OptiScaler's for a PC monitor: 14 px text at 1080p, tighter spacing, and one line per mod card. The name, search, **Hotkeys**, **Settings**, **Refresh** and close share one line at the top.
+- Move **Hotkeys** and **Settings** from the tabs to those buttons. The tabs stay above them; click one, or press LB or RB in Hotkeys, to go back to your mods.
+- Split Settings into pages listed on the left: Shortcuts, Radial menu and Interface. Every shortcut row looks the same: the current keys, then Record, Default and Off.
+- Move mod placement from Settings to **Hotkeys → Placement**.
 - Add **Settings → Interface → UI size** (80 to 150 %, `UISize`) on top of the size the resolution gives the panel.
-- The radial menu keeps its own larger text, read at a glance over the game.
+- Add your own tabs with the **+** after the tabs, and rename or delete one with a right click on it, instead of in Settings.
+- Drag tabs left or right to order them, Mod menus and Toggles too. The order is saved in ModActivator.User.ini.
+- Fix **Send** in Hotkeys: the row around it took the click.
 - Read what a mod's own `.asi` or `.addon64` says about its shortcuts, for mods ModActivator has never seen: the default config it writes, with its comments; a settings schema's labels and help texts; its version information for the mod's name; and, as the weakest source, a sentence naming the setting. The file is only read, never run. Descriptions from it say **From the mod's file**.
 - Keep what each mod's file said in `ModActivator\ModActivator.ModCache.bin`, so a file is read again only when the mod is new or updated, or ModActivator is. Mods you removed drop out of it the next time it is written.
 - For a mod with a single shortcut, the text near the code that reads the keyboard or controller decides whether it is a menu or a toggle when nothing else does.
