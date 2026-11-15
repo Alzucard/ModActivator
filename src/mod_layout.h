@@ -241,6 +241,22 @@ static bool saveRadialPause(int mode) {
   radialPause.store(mode);
   return true;
 }
+// The panel's size on top of the one the resolution gives it, in percent:
+// [General] UISize, from Settings -> Interface.
+static constexpr int uiSizes[] = {80, 90, 100, 110, 125, 150};
+static std::atomic<int> uiSize{100};
+static void loadUiSize() {
+  const int percent = atoi(generalSetting("UISize").c_str());
+  uiSize.store(percent >= 50 && percent <= 200 ? percent : 100);
+}
+static bool saveUiSize(int percent) {
+  if (!WritePrivateProfileStringA("General", "UISize", std::to_string(percent).c_str(),
+                                  writableUserConfig().c_str()))
+    return false;
+  uiSize.store(percent);
+  return true;
+}
+
 // Keys written as the menu records them: hex codes joined with +, like the
 // panel's own shortcut.
 static std::string keyCodesText(const std::vector<int> &keys) {
@@ -276,6 +292,7 @@ static void loadLayout() {
   padOpener.store(off ? 0 : __builtin_popcount(padBits) >= 2 ? padBits : defaultPadOpener);
   ml::State::Get().padShortcut.store(padOpener.load());
   loadRadial();
+  loadUiSize();
   const auto section = readProfileSection("ModLayout", path);
   ModLayout loaded;
   std::map<unsigned long, ModPlacement> ordered;
@@ -489,120 +506,317 @@ static unsigned recordPadShortcut(bool &recording) {
   return taken;
 }
 
-// The controller recording is for the radial menu's combination, not the
-// panel's, and what it took.
-static bool padRecordingRadial = false;
-static unsigned radialPadProposed = 0;
+// --- Settings -------------------------------------------------------------------
+// A list of pages on the left, one topic each, and rows on the right that all
+// look alike: the label in a column, the current value, then the buttons
+// (docs/UI-GUIDE.md).
 
-// Settings' part for the radial menu: its keys, its eight slots in order,
-// and what happens to the game while it is open.
-static void drawRadialSettings(const std::vector<Action> &actions, std::string &status) {
-  ImGui::TextColored(UI::gold, "Radial menu");
-  ImGui::TextDisabled("Hold the key, aim with the mouse or the right stick, let go to open.");
-  static std::vector<int> proposed;
-  static bool acknowledge = false;
-  const unsigned code = radialKeyCode();
-  ImGui::Text("Hold key: %s", code ? shortcutLabel(codeKeys(code)).c_str() : "none");
-  if (auto keys = UI::recordShortcut("Record radial key"); !keys.empty()) {
-    proposed = std::move(keys);
-    acknowledge = false;
+// The controller recording is for the radial menu's combination, not the
+// panel's.
+static bool padRecordingRadial = false;
+
+// Stops any key or combination being recorded: on a change of tab or page.
+static void stopRecording() {
+  UI::recording = 0;
+  padShortcutRecording = false;
+  padRecordingRadial = false;
+}
+
+// What the last change in Settings did, at the bottom of its page.
+static std::string settingsStatus;
+
+static float settingsLabelWidth() { return 120 * UI::scale; }
+static float settingsValueWidth() { return 190 * UI::scale; }
+
+// A row's label, in the column on the left; its controls follow on the line.
+static void settingLabel(const char *label, const char *tooltip = nullptr) {
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextUnformatted(label);
+  if (tooltip && ImGui::IsItemHovered())
+    ImGui::SetTooltip("%s", tooltip);
+  ImGui::SameLine(settingsLabelWidth());
+}
+
+// The current value, framed like a field so the values of a page line up.
+static void settingValue(const std::string &text, bool active, bool off) {
+  const auto &style = ImGui::GetStyle();
+  const ImVec2 min = ImGui::GetCursorScreenPos();
+  const ImVec2 max(min.x + settingsValueWidth(), min.y + ImGui::GetFrameHeight());
+  ImGui::Dummy(ImVec2(max.x - min.x, max.y - min.y));
+  auto *draw = ImGui::GetWindowDrawList();
+  draw->AddRectFilled(min, max, ImGui::GetColorU32(active ? ImGuiCol_FrameBgActive : ImGuiCol_FrameBg),
+                      style.FrameRounding);
+  draw->PushClipRect(min, ImVec2(max.x - style.FramePadding.x, max.y), true);
+  draw->AddText(ImVec2(min.x + style.FramePadding.x, min.y + style.FramePadding.y),
+                ImGui::GetColorU32(off && !active ? ImGuiCol_TextDisabled : ImGuiCol_Text), text.c_str());
+  draw->PopClipRect();
+  ImGui::SameLine();
+}
+
+// Details under a row (a recorded key, what it overlaps, Save), lined up
+// with the values.
+static void beginRowDetails() { ImGui::Indent(settingsLabelWidth()); }
+static void endRowDetails() { ImGui::Unindent(settingsLabelWidth()); }
+
+enum class RowAction { None, Save, Default, Off };
+
+// A keyboard shortcut's row: Label [keys] Record Default Off. A recorded key
+// shows under it with what it overlaps, and Save and Discard.
+struct KeyEdit {
+  std::vector<int> proposed;
+  bool acknowledge = false;
+};
+static RowAction keyRow(const char *label, const char *id, const std::string &current, KeyEdit &row,
+                        bool canTurnOff, const std::vector<int> &ownKeys, const char *ownName,
+                        const char *note = nullptr) {
+  ImGui::PushID(id);
+  RowAction result = RowAction::None;
+  const ImGuiID recordId = ImGui::GetID("Record");
+  const bool recording = UI::recording == recordId;
+  settingLabel(label);
+  std::string shown = current;
+  if (recording) {
+    shown = shortcutLabel(UI::captureModifiers());
+    shown += shown.empty() ? "Press the keys..." : " + ...";
+  }
+  settingValue(shown, recording, current == "Off");
+  if (ImGui::Button(recording ? "Cancel" : "Record")) {
+    if (recording)
+      UI::recording = 0;
+    else
+      UI::beginShortcutCapture(recordId);
+  }
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("%s", recording ? "Or press Escape." : "Press the new keys after clicking.");
+  if (auto keys = UI::captureShortcut(recordId); !keys.empty()) {
+    row.proposed = std::move(keys);
+    row.acknowledge = false;
   }
   ImGui::SameLine();
-  if (ImGui::Button("Default##RadialKey")) {
-    status = saveRadialKey("Grave") ? "Radial key reset to the key left of 1." : "Could not save the radial key.";
-    proposed.clear();
+  if (ImGui::Button("Default"))
+    result = RowAction::Default;
+  if (canTurnOff) {
+    ImGui::SameLine();
+    if (ImGui::Button("Off"))
+      result = RowAction::Off;
   }
-  ImGui::SameLine();
-  if (ImGui::Button("Off##RadialKey")) {
-    status = saveRadialKey("None") ? "Radial key off." : "Could not save the radial key.";
-    proposed.clear();
-  }
-  if (!proposed.empty()) {
-    ImGui::Text("New radial key: %s", shortcutLabel(proposed).c_str());
-    bool clashes = conflict(proposed, openerKeys()) != 0;
-    if (clashes)
-      ImGui::TextWrapped("Overlaps ModActivator's own shortcut.");
-    for (const auto &a : bindingsSnapshot())
-      if (conflict(proposed, a.cachedKeys)) {
-        clashes = true;
-        ImGui::TextWrapped("Overlaps %s / %s", UI::name(a).c_str(), UI::actionName(a).c_str());
-      }
-    for (const auto &[severity, who] : reservedClashes(proposed)) {
+  if (!row.proposed.empty()) {
+    beginRowDetails();
+    ImGui::Text("New: %s", shortcutLabel(row.proposed).c_str());
+    const ImVec4 warn(1, .6f, .2f, 1);
+    bool clashes = false;
+    if (!ownKeys.empty() && conflict(row.proposed, ownKeys)) {
       clashes = true;
-      ImGui::TextWrapped("%s %s", severity == 2 ? "Already used by" : "Overlaps", displayText(who).c_str());
+      ImGui::TextColored(warn, "Overlaps %s (%s)", ownName, shortcutLabel(ownKeys).c_str());
     }
-    ImGui::TextDisabled("The game sees this key too: pick one it does not use.");
+    for (const auto &a : bindingsSnapshot())
+      if (conflict(row.proposed, a.cachedKeys)) {
+        clashes = true;
+        ImGui::TextColored(warn, "Overlaps %s / %s", UI::name(a).c_str(), UI::actionName(a).c_str());
+      }
+    for (const auto &[severity, who] : reservedClashes(row.proposed)) {
+      clashes = true;
+      ImGui::TextColored(warn, "%s %s", severity == 2 ? "Already used by" : "Overlaps", displayText(who).c_str());
+    }
+    if (note)
+      ImGui::TextDisabled("%s", note);
     if (clashes)
-      ImGui::Checkbox("Save despite overlap##Radial", &acknowledge);
-    ImGui::BeginDisabled((clashes && !acknowledge) || proposed.back() == VK_ESCAPE);
-    if (ImGui::Button("Save radial key")) {
-      status = saveRadialKey(keyCodesText(proposed)) ? "Radial key updated." : "Could not save the radial key.";
-      proposed.clear();
-    }
+      ImGui::Checkbox("Save anyway", &row.acknowledge);
+    ImGui::BeginDisabled((clashes && !row.acknowledge) || row.proposed.back() == VK_ESCAPE);
+    if (ImGui::Button("Save"))
+      result = RowAction::Save;
     ImGui::EndDisabled();
     ImGui::SameLine();
-    if (ImGui::Button("Discard##RadialKey"))
-      proposed.clear();
+    if (ImGui::Button("Discard"))
+      row.proposed.clear();
+    endRowDetails();
   }
+  ImGui::PopID();
+  return result;
+}
 
-  const unsigned pad = padRadial.load();
-  ImGui::Text("Hold on the controller: %s", pad ? padLabel(pad).c_str() : "none");
-  if (ImGui::Button(padShortcutRecording && padRecordingRadial ? "Press and release a combination...##RadialPad"
-                                                               : "Record##RadialPad")) {
-    const bool stop = padShortcutRecording && padRecordingRadial;
-    padShortcutRecording = !stop;
-    padRecordingRadial = !stop;
-    radialPadProposed = 0;
+// A controller combination's row, the same way. One recording at a time,
+// for the panel's combination or the radial menu's.
+struct PadEdit {
+  unsigned proposed = 0;
+};
+static RowAction padRow(const char *label, const char *id, unsigned current, PadEdit &row, bool radial,
+                        unsigned other, const char *otherName) {
+  ImGui::PushID(id);
+  RowAction result = RowAction::None;
+  const bool recording = padShortcutRecording && padRecordingRadial == radial;
+  settingLabel(label);
+  settingValue(recording ? "Press and release the buttons..." : current ? padLabel(current) : "Off", recording,
+               !current);
+  if (ImGui::Button(recording ? "Cancel" : "Record")) {
+    padShortcutRecording = !recording;
+    padRecordingRadial = radial;
+    row.proposed = 0;
   }
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("Hold two buttons or more together, then let go.");
   ImGui::SameLine();
-  if (ImGui::Button("Default##RadialPad"))
-    radialPadProposed = defaultPadRadial;
+  if (ImGui::Button("Default"))
+    result = RowAction::Default;
   ImGui::SameLine();
-  if (ImGui::Button("Off##RadialPad"))
-    status = saveRadialPad(0) ? "Radial controller combination off." : "Could not save it.";
-  if (radialPadProposed) {
-    ImGui::Text("New combination: %s", padLabel(radialPadProposed).c_str());
-    if (padConflict(radialPadProposed, padOpener.load()))
-      ImGui::TextWrapped("Overlaps the panel's controller shortcut (%s).", padLabel(padOpener.load()).c_str());
+  if (ImGui::Button("Off"))
+    result = RowAction::Off;
+  if (row.proposed) {
+    beginRowDetails();
+    ImGui::Text("New: %s", padLabel(row.proposed).c_str());
+    const ImVec4 warn(1, .6f, .2f, 1);
+    if (padConflict(row.proposed, other))
+      ImGui::TextColored(warn, "Overlaps %s (%s)", otherName, padLabel(other).c_str());
     for (const auto &a : bindingsSnapshot())
-      if (padConflict(radialPadProposed, a.padButtons))
-        ImGui::TextWrapped("Overlaps %s / %s (%s)", UI::name(a).c_str(), UI::actionName(a).c_str(),
+      if (padConflict(row.proposed, a.padButtons))
+        ImGui::TextColored(warn, "Overlaps %s / %s (%s)", UI::name(a).c_str(), UI::actionName(a).c_str(),
                            padLabel(a.padButtons).c_str());
-    if (ImGui::Button("Save combination##RadialPad")) {
-      status = saveRadialPad(radialPadProposed) ? "Radial controller combination updated." : "Could not save it.";
-      radialPadProposed = 0;
-    }
+    if (ImGui::Button("Save"))
+      result = RowAction::Save;
     ImGui::SameLine();
-    if (ImGui::Button("Discard##RadialPad"))
-      radialPadProposed = 0;
+    if (ImGui::Button("Discard"))
+      row.proposed = 0;
+    endRowDetails();
+  }
+  ImGui::PopID();
+  return result;
+}
+
+static KeyEdit openerRow, radialKeyRow;
+static PadEdit padOpenerRow, padRadialRow;
+
+// Settings -> Shortcuts: opening and closing the panel.
+static void drawShortcutSettings() {
+  auto &status = settingsStatus;
+  ImGui::SeparatorText("Open and close the panel");
+  switch (keyRow("Keyboard", "Opener", shortcutLabel(openerKeys()), openerRow, false,
+                 radialKeyCode() ? codeKeys(radialKeyCode()) : std::vector<int>{}, "the radial menu's key")) {
+  case RowAction::Save:
+    if (saveOpener(openerRow.proposed)) {
+      status = "Shortcut saved.";
+      openerRow.proposed.clear();
+    } else {
+      status = "Could not save the shortcut.";
+    }
+    break;
+  case RowAction::Default:
+    openerRow.proposed = {VK_CONTROL, VK_SHIFT, VK_BACK};
+    openerRow.acknowledge = false;
+    UI::recording = 0;
+    break;
+  default:
+    break;
+  }
+  switch (padRow("Controller", "PadOpener", padOpener.load(), padOpenerRow, false, padRadial.load(),
+                 "the radial menu's combination")) {
+  case RowAction::Save:
+    status = savePadOpener(padOpenerRow.proposed) ? "Controller shortcut saved."
+                                                  : "Could not save the controller shortcut.";
+    padOpenerRow.proposed = 0;
+    break;
+  case RowAction::Default:
+    padShortcutRecording = false;
+    padOpenerRow.proposed = defaultPadOpener;
+    break;
+  case RowAction::Off:
+    padShortcutRecording = false;
+    padOpenerRow.proposed = 0;
+    status = savePadOpener(0) ? "Controller shortcut off." : "Could not save the controller shortcut.";
+    break;
+  default:
+    break;
+  }
+  if (!ml::Settings::Get().hookXInput)
+    ImGui::TextDisabled("HookXInput=0: the game also sees the buttons you press for the panel.");
+}
+
+// Settings -> Radial menu: its keys, what the game does while it is open, and
+// its eight entries in order.
+static void drawRadialSettings(const std::vector<Action> &actions) {
+  auto &status = settingsStatus;
+  ImGui::SeparatorText("Open the ring");
+  ImGui::TextDisabled("Hold, aim with the mouse or the right stick, let go to open.");
+  const unsigned code = radialKeyCode();
+  switch (keyRow("Keyboard", "RadialKey", code ? shortcutLabel(codeKeys(code)) : "Off", radialKeyRow, true,
+                 openerKeys(), "the panel's shortcut", "The game sees this key too: pick one it does not use.")) {
+  case RowAction::Save:
+    status = saveRadialKey(keyCodesText(radialKeyRow.proposed)) ? "Radial key saved." : "Could not save the radial key.";
+    radialKeyRow.proposed.clear();
+    break;
+  case RowAction::Default:
+    status = saveRadialKey("Grave") ? "Radial key reset to the key left of 1." : "Could not save the radial key.";
+    radialKeyRow.proposed.clear();
+    break;
+  case RowAction::Off:
+    status = saveRadialKey("None") ? "Radial key off." : "Could not save the radial key.";
+    radialKeyRow.proposed.clear();
+    break;
+  default:
+    break;
+  }
+  switch (padRow("Controller", "RadialPad", padRadial.load(), padRadialRow, true, padOpener.load(),
+                 "the panel's controller shortcut")) {
+  case RowAction::Save:
+    status = saveRadialPad(padRadialRow.proposed) ? "Radial combination saved." : "Could not save it.";
+    padRadialRow.proposed = 0;
+    break;
+  case RowAction::Default:
+    padShortcutRecording = false;
+    padRadialRow.proposed = defaultPadRadial;
+    break;
+  case RowAction::Off:
+    padShortcutRecording = false;
+    padRadialRow.proposed = 0;
+    status = saveRadialPad(0) ? "Radial combination off." : "Could not save it.";
+    break;
+  default:
+    break;
   }
 
+  ImGui::Spacing();
+  ImGui::SeparatorText("While the ring is open");
   int pause = radialPause.load();
   static const char *pauseLabels[] = {"Keeps running", "Slow motion", "Freezes"};
-  ImGui::SetNextItemWidth(220 * UI::scale);
-  if (ImGui::Combo("The game while the ring is open", &pause, pauseLabels, IM_ARRAYSIZE(pauseLabels))) {
+  settingLabel("The game", "Slow motion and freezing use the game's own speed control.");
+  ImGui::SetNextItemWidth(settingsValueWidth());
+  if (ImGui::Combo("##Pause", &pause, pauseLabels, IM_ARRAYSIZE(pauseLabels))) {
     status = saveRadialPause(pause) ? "Saved." : "Could not save it.";
     if (pause)
       gameSpeed::prepare();
   }
-  if (radialPause.load())
-    ImGui::TextDisabled("Slowing and freezing: %s", gameSpeed::statusText());
+  if (radialPause.load()) {
+    beginRowDetails();
+    ImGui::TextDisabled("Speed control: %s", gameSpeed::statusText());
+    endRowDetails();
+  }
 
   ImGui::Spacing();
-  ImGui::TextUnformatted("On the ring, clockwise from the top");
-  if (radialSlots.empty())
-    ImGui::TextDisabled("Nothing yet. Use the ring button on a card in Mod menus or Toggles.");
+  ImGui::SeparatorText("Entries, clockwise from the top");
+  if (radialSlots.empty()) {
+    ImGui::TextDisabled("None yet. Pin a mod with the ring button on its card in Mod menus or Toggles.");
+    return;
+  }
+  if (!ImGui::BeginTable("RadialSlots", 3, ImGuiTableFlags_RowBg))
+    return;
+  ImGui::TableSetupColumn("#", ImGuiTableColumnFlags_WidthFixed);
+  ImGui::TableSetupColumn("Entry", ImGuiTableColumnFlags_WidthStretch);
+  ImGui::TableSetupColumn("##Move", ImGuiTableColumnFlags_WidthFixed);
   for (size_t i = 0; i < radialSlots.size(); ++i) {
     ImGui::PushID(static_cast<int>(i));
     const auto &id = radialSlots[i];
     const auto found = std::find_if(actions.begin(), actions.end(),
                                     [&](const Action &a) { return cachedIdentity(a) == id; });
-    const std::string label = found == actions.end() ? id + " (not loaded)"
-                                                     : UI::name(*found) + " / " + UI::actionName(*found);
-    ImGui::Text("%zu.", i + 1);
-    ImGui::SameLine();
-    ImGui::TextUnformatted(label.c_str());
-    ImGui::SameLine();
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextDisabled("%zu", i + 1);
+    ImGui::TableSetColumnIndex(1);
+    ImGui::AlignTextToFramePadding();
+    if (found == actions.end())
+      ImGui::TextDisabled("%s (not loaded)", id.c_str());
+    else
+      ImGui::Text("%s / %s", UI::name(*found).c_str(), UI::actionName(*found).c_str());
+    ImGui::TableSetColumnIndex(2);
     auto next = radialSlots;
     bool changed = false;
     ImGui::BeginDisabled(i == 0);
@@ -629,175 +843,141 @@ static void drawRadialSettings(const std::vector<Action> &actions, std::string &
       break; // the list changed under the loop
     }
   }
+  ImGui::EndTable();
 }
 
-// cardsStamp changes whenever the menu rebuilds `actions`.
-static void drawSettings(const std::vector<Action> &actions, unsigned cardsStamp) {
-  static char tabName[64]{};
-  static int editingTab = 0;
-  static std::string status;
-  static std::vector<int> proposed;
-  static bool acknowledge = false;
-  ImGui::BeginChild("SettingsScroll", ImVec2(0, 0), ImGuiChildFlags_NavFlattened);
-  ImGui::Text("ModActivator shortcut: %s", shortcutLabel(openerKeys()).c_str());
-  if (auto keys = UI::recordShortcut("Record opener"); !keys.empty()) {
-    proposed = std::move(keys);
-    acknowledge = false;
-    status.clear();
-  }
-  ImGui::SameLine();
-  if (ImGui::Button("Use default")) {
-    proposed = {VK_CONTROL, VK_SHIFT, VK_BACK};
-    UI::recording = 0;
-    acknowledge = false;
-  }
-  // The same for the controller: open and close the panel with a button
-  // combination. Two buttons or more, so a single press never opens it.
-  {
-    static unsigned padProposed = 0;
-    auto &padRecording = padShortcutRecording;
-    const unsigned current = padOpener.load();
-    ImGui::Text("Controller shortcut: %s", current ? padLabel(current).c_str() : "none");
-    if (ImGui::Button(padRecording && !padRecordingRadial ? "Press and release a combination...##Pad"
-                                                          : "Record controller shortcut")) {
-      padRecording = !padRecording || padRecordingRadial;
-      padRecordingRadial = false;
-      padProposed = 0;
-    }
-    // One recording at a time, for the panel's combination or the radial
-    // menu's (Settings further down).
-    if (const unsigned taken = recordPadShortcut(padRecording)) {
-      const bool enough = __builtin_popcount(taken) >= 2;
-      status = enough ? "" : "Use two buttons or more, such as LB + RB + Back.";
-      (padRecordingRadial ? radialPadProposed : padProposed) = enough ? taken : 0;
-      padRecordingRadial = false;
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Controller off")) {
-      padRecording = false;
-      padProposed = 0;
-      status = savePadOpener(0) ? "Controller shortcut off." : "Could not save the controller shortcut.";
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Default##Pad")) {
-      padRecording = false;
-      padProposed = defaultPadOpener;
-    }
-    if (padProposed) {
-      ImGui::Text("New controller shortcut: %s", padLabel(padProposed).c_str());
-      for (const auto &a : bindingsSnapshot())
-        if (padConflict(padProposed, a.padButtons))
-          ImGui::TextWrapped("Overlaps %s / %s (%s)", UI::name(a).c_str(),
-                             UI::actionName(a).c_str(), padLabel(a.padButtons).c_str());
-      if (ImGui::Button("Save controller shortcut")) {
-        status = savePadOpener(padProposed) ? "Controller shortcut updated."
-                                            : "Could not save the controller shortcut.";
-        padProposed = 0;
-      }
-      ImGui::SameLine();
-      if (ImGui::Button("Discard##Pad"))
-        padProposed = 0;
-    }
-    if (!ml::Settings::Get().hookXInput)
-      ImGui::TextDisabled("HookXInput=0: the game also sees the buttons you press for it.");
-    ImGui::Separator();
-  }
-  if (!proposed.empty()) {
-    ImGui::Text("New shortcut: %s", shortcutLabel(proposed).c_str());
-    bool clashes = false;
-    for (const auto &a : bindingsSnapshot())
-      if (conflict(proposed, a.cachedKeys)) {
-        clashes = true;
-        ImGui::TextWrapped("Overlaps %s / %s", UI::name(a).c_str(),
-                           UI::actionName(a).c_str());
-      }
-    for (const auto &[severity, who] : reservedClashes(proposed)) {
-      clashes = true;
-      ImGui::TextWrapped("%s %s", severity == 2 ? "Already used by" : "Overlaps",
-                         displayText(who).c_str());
-    }
-    if (clashes)
-      ImGui::Checkbox("Save opener despite overlap", &acknowledge);
-    ImGui::BeginDisabled(clashes && !acknowledge);
-    if (ImGui::Button("Save opener")) {
-      const bool saved = saveOpener(proposed);
-      status = saved ? "Shortcut updated." : "Could not save the shortcut.";
-      if (saved)
-        proposed.clear();
-    }
-    ImGui::EndDisabled();
-    ImGui::SameLine();
-    if (ImGui::Button("Discard shortcut"))
-      proposed.clear();
-  }
+// Whether a custom tab may take this name: not empty, not a built-in tab's,
+// not another custom tab's.
+static bool tabNameFree(const std::string &name, int except) {
+  const auto folded = lower(name);
+  if (name.empty() || name.find("##") != name.npos || folded == "mod menus" || folded == "toggles" ||
+      folded == "hotkeys" || folded == "settings")
+    return false;
+  for (const auto &[id, existing] : modLayout.tabs)
+    if (id != except && lower(existing) == folded)
+      return false;
+  return true;
+}
 
-  ImGui::Separator();
-  drawRadialSettings(actions, status);
-  ImGui::Separator();
-  ImGui::TextUnformatted("Custom tabs");
-  if (ImGui::BeginCombo("##TabToEdit", editingTab && modLayout.tabs.count(editingTab)
-                                           ? modLayout.tabs.at(editingTab).c_str()
-                                           : "New tab")) {
-    if (ImGui::Selectable("New tab", !editingTab)) {
-      editingTab = 0;
-      tabName[0] = 0;
-    }
-    for (const auto &[id, name] : modLayout.tabs) {
-      ImGui::PushID(id);
-      if (ImGui::Selectable(name.c_str(), editingTab == id)) {
-        editingTab = id;
-        snprintf(tabName, sizeof tabName, "%s", name.c_str());
-      }
-      ImGui::PopID();
-    }
-    ImGui::EndCombo();
+// --- your own tabs ---------------------------------------------------------------
+// A + after them adds one; a right click on one offers Rename and Delete. The
+// popups are opened and drawn at the window's level, after the tab bar, from
+// requests the tab bar leaves here.
+static const char *tabPopupRequest = nullptr;
+static int tabMenuFor = 0;      // the tab the right click was on
+static int tabEditing = 0;      // the tab being renamed; 0 for a new one
+static int tabToSelect = 0;     // a tab just added, selected on the next frame; 0 for none
+                                // (a custom tab's id is never 0, Mod menus' is)
+static char tabNameText[64]{};
+static std::string tabNameError;
+
+// After a custom tab's BeginTabItem, while it is the last item.
+static void tabContextClick(int tab) {
+  if (ImGui::IsItemHovered() && ImGui::IsMouseReleased(ImGuiMouseButton_Right)) {
+    tabMenuFor = tab;
+    tabPopupRequest = "TabMenu";
   }
-  ImGui::InputText("Tab name", tabName, sizeof tabName);
-  if (ImGui::Button(editingTab ? "Rename tab" : "Add tab")) {
-    const auto name = trim(tabName);
-    auto next = modLayout;
-    bool used = name.empty() || name.find("##") != name.npos ||
-                lower(name) == "mod menus" || lower(name) == "toggles" ||
-                lower(name) == "hotkeys" || lower(name) == "settings";
-    for (const auto &[id, existing] : next.tabs)
-      used |= id != editingTab && lower(existing) == lower(name);
-    if (used) {
-      status = "Enter a unique tab name.";
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+    ImGui::SetTooltip("Right-click to rename or delete");
+}
+
+// The + after your tabs.
+static void newTabButton() {
+  if (ImGui::TabItemButton("+", ImGuiTabItemFlags_NoTooltip)) {
+    tabEditing = 0;
+    tabNameText[0] = 0;
+    tabNameError.clear();
+    tabPopupRequest = "TabName";
+  }
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+    ImGui::SetTooltip("New tab");
+}
+
+// The right-click menu and the name popup. Saving replaces modLayout, which
+// is why none of this runs inside the tab bar's loop over the tabs.
+static void drawTabPopups() {
+  if (tabPopupRequest) {
+    ImGui::OpenPopup(tabPopupRequest);
+    tabPopupRequest = nullptr;
+  }
+  int remove = 0;
+  if (ImGui::BeginPopup("TabMenu")) {
+    const auto found = modLayout.tabs.find(tabMenuFor);
+    if (found == modLayout.tabs.end()) {
+      ImGui::CloseCurrentPopup();
     } else {
-      int id = editingTab ? editingTab : firstCustomTab;
-      while (!editingTab && next.tabs.count(id))
-        ++id;
-      next.tabs[id] = name;
-      if (saveLayout(std::move(next))) {
-        editingTab = id;
-        status = "Tab saved.";
+      ImGui::TextDisabled("%s", found->second.c_str());
+      ImGui::Separator();
+      if (ImGui::Selectable("Rename")) {
+        tabEditing = tabMenuFor;
+        snprintf(tabNameText, sizeof tabNameText, "%s", found->second.c_str());
+        tabNameError.clear();
+        tabPopupRequest = "TabName";
+      }
+      if (ImGui::Selectable("Delete"))
+        remove = tabMenuFor;
+      if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+        ImGui::SetTooltip("Its mods go back to Mod menus or Toggles.");
+    }
+    ImGui::EndPopup();
+  }
+  if (remove) {
+    auto next = modLayout;
+    next.tabs.erase(remove);
+    for (auto &place : next.placements)
+      if (place.tab == remove)
+        place.tab = 0;
+    if (!saveLayout(std::move(next)))
+      LOG_ERR("[menu] could not save ModActivator.User.ini after deleting a tab.");
+  }
+  if (ImGui::BeginPopup("TabName")) {
+    ImGui::TextUnformatted(tabEditing ? "Rename tab" : "New tab");
+    if (ImGui::IsWindowAppearing())
+      ImGui::SetKeyboardFocusHere();
+    ImGui::SetNextItemWidth(200 * UI::scale);
+    const bool entered = ImGui::InputTextWithHint("##TabName", "Name", tabNameText, sizeof tabNameText,
+                                                  ImGuiInputTextFlags_EnterReturnsTrue);
+    if (!tabNameError.empty())
+      ImGui::TextColored(ImVec4(1, .6f, .2f, 1), "%s", tabNameError.c_str());
+    if (ImGui::Button(tabEditing ? "Save" : "Add") || entered) {
+      const auto text = trim(tabNameText);
+      if (!tabNameFree(text, tabEditing)) {
+        tabNameError = text.empty() ? "Enter a name." : "Another tab has that name.";
       } else {
-        status = "Could not save the tab.";
+        auto next = modLayout;
+        int id = tabEditing;
+        if (!id) {
+          id = firstCustomTab;
+          while (next.tabs.count(id))
+            ++id;
+        }
+        next.tabs[id] = text;
+        if (saveLayout(std::move(next))) {
+          UI::noteGlyphs(text);
+          if (!tabEditing)
+            tabToSelect = id;
+          ImGui::CloseCurrentPopup();
+        } else {
+          tabNameError = "Could not save the tab.";
+        }
       }
     }
-  }
-  if (editingTab) {
     ImGui::SameLine();
-    if (ImGui::Button("Delete tab")) {
-      auto next = modLayout;
-      next.tabs.erase(editingTab);
-      for (auto &place : next.placements)
-        if (place.tab == editingTab)
-          place.tab = 0;
-      if (saveLayout(std::move(next))) {
-        editingTab = 0;
-        tabName[0] = 0;
-        status = "Tab deleted. Its mods returned to their default tabs.";
-      } else {
-        status = "Could not delete the tab.";
-      }
-    }
+    if (ImGui::Button("Cancel"))
+      ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
   }
-  if (!status.empty())
-    ImGui::TextWrapped("%s", status.c_str());
+}
 
-  ImGui::Separator();
-  ImGui::TextUnformatted("Mod placement");
+// Settings -> Mod placement: which tab each mod's card is on, and whether a
+// binding is a menu, a toggle or a hotkey only. cardsStamp changes whenever
+// the menu rebuilds `actions`.
+static void drawPlacementSettings(const std::vector<Action> &actions, unsigned cardsStamp) {
+  auto &status = settingsStatus;
+  ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+  ImGui::TextWrapped("Where each mod's card goes, and what it is shown as. Hover a binding for what it does. "
+                     "Add your own tabs with the + after the tabs; right-click one to rename or delete it.");
+  ImGui::PopStyleColor();
   // The cards, then every other binding, rebuilt only when either the
   // catalog or the card order changes.
   // Keyed on the copies themselves, not the shared counter, so a refresh
@@ -817,12 +997,10 @@ static void drawSettings(const std::vector<Action> &actions, unsigned cardsStamp
       if (!visible.count(cachedIdentity(binding)))
         bindings.push_back(binding);
   }
-  if (ImGui::BeginTable("Placement", 4, ImGuiTableFlags_RowBg |
-                                           ImGuiTableFlags_Resizable)) {
-    ImGui::TableSetupColumn("Binding", ImGuiTableColumnFlags_WidthStretch, 1.1f);
-    ImGui::TableSetupColumn("What it does", ImGuiTableColumnFlags_WidthStretch, 1.5f);
-    ImGui::TableSetupColumn("Tab");
-    ImGui::TableSetupColumn("Show as");
+  if (ImGui::BeginTable("Placement", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable)) {
+    ImGui::TableSetupColumn("Binding", ImGuiTableColumnFlags_WidthStretch, 1.2f);
+    ImGui::TableSetupColumn("Tab", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+    ImGui::TableSetupColumn("Show as", ImGuiTableColumnFlags_WidthStretch, 0.7f);
     ImGui::TableHeadersRow();
     const char *types[] = {"Automatic", "Menu", "Toggle", "Hotkeys only"};
     UI::groupedBindings(bindings, [&](const Action &action) {
@@ -831,18 +1009,17 @@ static void drawSettings(const std::vector<Action> &actions, unsigned cardsStamp
       ImGui::TableNextRow();
       ImGui::TableSetColumnIndex(0);
       const auto name = UI::actionName(action);
+      ImGui::AlignTextToFramePadding();
       ImGui::TextUnformatted(name.c_str());
       if (ImGui::IsItemHovered())
         UI::bindingTooltip(action);
       ImGui::TableSetColumnIndex(1);
-      UI::descriptionCell(action);
-      ImGui::TableSetColumnIndex(2);
       if (!visible.count(binding)) {
+        ImGui::AlignTextToFramePadding();
         ImGui::TextDisabled("No card");
       } else {
         const int current = assignedTab(binding);
-        const std::string automatic = action.toggle ? "Automatic (Toggles)"
-                                                    : "Automatic (Mod menus)";
+        const std::string automatic = action.toggle ? "Automatic (Toggles)" : "Automatic (Mod menus)";
         const auto label = current == modMenusPlacement ? "Mod menus"
                          : current == togglesPlacement ? "Toggles"
                          : current ? modLayout.tabs.at(current) : automatic;
@@ -862,12 +1039,11 @@ static void drawSettings(const std::vector<Action> &actions, unsigned cardsStamp
           if (destination != current) {
             auto next = modLayout;
             placementFor(next, binding).tab = destination;
-            status = saveLayout(std::move(next)) ? "Placement saved."
-                                                  : "Could not save placement.";
+            status = saveLayout(std::move(next)) ? "Placement saved." : "Could not save placement.";
           }
         }
       }
-      ImGui::TableSetColumnIndex(3);
+      ImGui::TableSetColumnIndex(2);
       int type = action.typeOverride;
       ImGui::SetNextItemWidth(-FLT_MIN);
       if (ImGui::Combo("##BindingType", &type, types, IM_ARRAYSIZE(types))) {
@@ -881,6 +1057,67 @@ static void drawSettings(const std::vector<Action> &actions, unsigned cardsStamp
       ImGui::PopID();
     });
     ImGui::EndTable();
+  }
+}
+
+// Settings -> Interface: the panel's size.
+static void drawInterfaceSettings() {
+  ImGui::SeparatorText("Size");
+  settingLabel("UI size", "On top of the size your screen resolution gives the panel.");
+  const int current = uiSize.load();
+  ImGui::SetNextItemWidth(settingsValueWidth());
+  if (ImGui::BeginCombo("##UISize", (std::to_string(current) + " %").c_str())) {
+    for (const int percent : uiSizes)
+      if (ImGui::Selectable((std::to_string(percent) + " %").c_str(), percent == current) && percent != current)
+        settingsStatus = saveUiSize(percent) ? "Saved." : "Could not save the UI size.";
+    ImGui::EndCombo();
+  }
+}
+
+static int settingsPage = 0;
+static const char *const settingsPages[] = {"Shortcuts", "Radial menu", "Mod placement", "Interface"};
+
+static void drawSettings(const std::vector<Action> &actions, unsigned cardsStamp) {
+  const float u = UI::scale;
+  // A controller combination is taken whichever page is showing.
+  if (const unsigned taken = recordPadShortcut(padShortcutRecording)) {
+    const bool enough = __builtin_popcount(taken) >= 2;
+    if (!enough)
+      settingsStatus = "Use two buttons or more, such as LB + RB + Back.";
+    (padRecordingRadial ? padRadialRow : padOpenerRow).proposed = enough ? taken : 0;
+    padRecordingRadial = false;
+  }
+  if (previewMode && previewTab >= 65536)
+    settingsPage = previewTab - 65536;
+
+  ImGui::BeginChild("SettingsPages", ImVec2(120 * u, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_NavFlattened);
+  for (int i = 0; i < IM_ARRAYSIZE(settingsPages); ++i)
+    if (ImGui::Selectable(settingsPages[i], settingsPage == i) && settingsPage != i) {
+      settingsPage = i;
+      stopRecording();
+      settingsStatus.clear();
+    }
+  ImGui::EndChild();
+  ImGui::SameLine();
+  ImGui::BeginChild("SettingsPage", ImVec2(0, 0), ImGuiChildFlags_NavFlattened);
+  switch (settingsPage) {
+  case 0:
+    drawShortcutSettings();
+    break;
+  case 1:
+    drawRadialSettings(actions);
+    break;
+  case 2:
+    drawPlacementSettings(actions, cardsStamp);
+    break;
+  default:
+    drawInterfaceSettings();
+    break;
+  }
+  if (!settingsStatus.empty()) {
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::TextWrapped("%s", settingsStatus.c_str());
   }
   ImGui::EndChild();
 }

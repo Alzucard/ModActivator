@@ -279,6 +279,10 @@ static const Action *reloadBinding(const Action &edited, const std::vector<Actio
       return &a;
   return nullptr;
 }
+#ifdef MODACTIVATOR_TESTS
+// Where the last row's Send button was drawn, for the click test.
+static ImRect lastSendButton;
+#endif
 static void drawHotkeys() {
   static Action editing;
   static bool selected = false;
@@ -353,7 +357,7 @@ static void drawHotkeys() {
       const auto rowLabel = UI::actionName(a);
       if (ImGui::Selectable(rowLabel.c_str(),
                             selected && cachedIdentity(a) == cachedIdentity(editing),
-                            ImGuiSelectableFlags_SpanAllColumns)) {
+                            ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap)) {
         try {
           auto selectedSnapshot = readBytes(folder + a.file);
           editing = a;
@@ -403,6 +407,9 @@ static void drawHotkeys() {
       ImGui::BeginDisabled(!sendTargets.ready.count(module) || managedMenu);
       if (ImGui::SmallButton("Send"))
         queueAction(a, a.menuRank > 0 && !a.toggle);
+#ifdef MODACTIVATOR_TESTS
+      lastSendButton = {ImGui::GetItemRectMin(), ImGui::GetItemRectMax()};
+#endif
       ImGui::EndDisabled();
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
         ImGui::SetTooltip("%s", managedMenu ? "Open it through ModHub."

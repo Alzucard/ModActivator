@@ -46,7 +46,9 @@ def png(path, width, height, rows):
 m = ctypes.WinDLL(str(build / 'ModActivator-tests.asi'))
 preview = m.ModActivatorPreview
 preview.argtypes = [ctypes.c_char_p, ctypes.c_int]
-for tab, name in [(0, 'mod-menus'), (1, 'toggles'), (2, 'hotkeys'), (65536, 'settings')]:
+# Settings once per page, in the order of its list.
+pages = ['shortcuts', 'radial', 'placement', 'interface']
+for tab, name in [(0, 'mod-menus'), (1, 'toggles'), (2, 'hotkeys')] +         [(65536 + i, 'settings' if i == 0 else f'settings-{page}') for i, page in enumerate(pages)]:
     data, pixels = build / f'preview-{name}.bin', build / f'preview-{name}.rgba'
     result = preview(str(data).encode(), tab)
     assert result == 0, f'preview of {name} failed with {result}'

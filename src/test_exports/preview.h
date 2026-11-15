@@ -193,7 +193,7 @@ extern "C" __declspec(dllexport) int ModActivatorPreview(const char *path,
       // No version: the images outlive releases; the panel shows it.
       if (scene.footY > 0)
         bg->AddText(textFont, 24.0f, ImVec2(left, scene.footY), muted, "For Crimson Desert");
-      const ImVec2 panel(820 * UI::scale, 740 * UI::scale);
+      const ImVec2 panel(ml::gui::panelWidth * UI::scale, ml::gui::panelHeight * UI::scale);
       ImGui::SetNextWindowPos(scene.fade ? ImVec2(size.x - left - panel.x, 56)
                                          : ImVec2(size.x - 24 - panel.x, (size.y - panel.y) * 0.5f));
     }
@@ -205,7 +205,7 @@ extern "C" __declspec(dllexport) int ModActivatorPreview(const char *path,
       // Fully faded a little before the edge, so nothing shows through at
       // the bottom.
       const ImVec2 size = io.DisplaySize;
-      const float panelLeft = size.x - scene.left - 820 * UI::scale - 16;
+      const float panelLeft = size.x - scene.left - ml::gui::panelWidth * UI::scale - 16;
       const ImU32 clear = IM_COL32(34, 14, 16, 0), solid = IM_COL32(34, 14, 16, 255);
       auto *fg = ImGui::GetForegroundDrawList();
       fg->AddRectFilledMultiColor(ImVec2(panelLeft, size.y * 0.58f), ImVec2(size.x, size.y * 0.9f),

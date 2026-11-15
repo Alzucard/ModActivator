@@ -45,7 +45,7 @@ With ReShade 6.8.0 or newer, ModActivator draws through ReShade's add-on callbac
 
 ## Binding types
 
-ModActivator uses shortcut names and nearby INI comments to identify menu openers and feature toggles. To correct a guess, open **Settings → Mod placement** and set **Show as** to **Menu**, **Toggle**, or **Hotkeys only**. **Automatic** clears the override. These choices are saved in ModActivator.User.ini and apply immediately. Hotkeys and Mod placement show a description preview when one is available (see below). Hover over a binding to see its exact key and the full description.
+ModActivator uses shortcut names and nearby INI comments to identify menu openers and feature toggles. To correct a guess, open **Settings → Mod placement** and set **Show as** to **Menu**, **Toggle**, or **Hotkeys only**. **Automatic** clears the override. These choices are saved in ModActivator.User.ini and apply immediately. Hotkeys shows a description preview when one is available (see below). Hover over a binding, here or in Mod placement, to see its exact key and the full description.
 
 ## What a shortcut does
 
@@ -69,9 +69,11 @@ Symbolic shortcuts map by physical key position and display the key label for th
 
 ## Custom tabs and panel shortcut
 
-In **Settings**, choose **New tab**, enter a name, and click **Add tab**. Use the **Tab** column in **Mod placement** to move a mod to Mod menus, Toggles, or any custom tab. The **Show as** column controls how the binding is classified. Its action stays the same. Drag the handle on a mod card to reorder it within its tab. Deleting a tab returns its mods to their default tabs. Changes are saved in ModActivator.User.ini.
+Click **+** after the tabs, enter a name and press Enter. Right-click one of your tabs to **Rename** or **Delete** it. Use the **Tab** column in **Settings → Mod placement** to move a mod to Mod menus, Toggles, or any custom tab. The **Show as** column controls how the binding is classified. Its action stays the same. Drag the handle on a mod card to reorder it within its tab. Deleting a tab returns its mods to their default tabs. Changes are saved in ModActivator.User.ini.
 
-Use **Record opener** and **Save opener** to change ModActivator’s shortcut immediately. **Use default** restores Ctrl+Shift+Backspace when saved.
+In **Settings → Shortcuts**, click **Record** beside **Keyboard**, press the new keys, check what they overlap and click **Save**: the shortcut changes at once. **Default** proposes Ctrl+Shift+Backspace again.
+
+**Settings → Interface → UI size** makes the whole panel smaller or larger (80 to 150 %, `UISize`), on top of the size your resolution gives it.
 
 ## Discovery and compatibility
 
@@ -95,7 +97,7 @@ The game sees the radial key too, as it sees every keyboard key: pick one it doe
 
 ## Controller
 
-Hold **LB + RB**, then press **Back**, to open or close the panel. The buttons of that combination are kept from the game while you hold them, so the final press does not also act in the game. Change it or switch it off under **Settings → Record controller shortcut** (two buttons or more), or with `PadOpenShortcut` in `ModActivator.ini` (`None` for off). With `HookXInput=0` the shortcut still works, but the game sees those buttons too.
+Hold **LB + RB**, then press **Back**, to open or close the panel. The buttons of that combination are kept from the game while you hold them, so the final press does not also act in the game. Change it or switch it off under **Settings → Shortcuts → Controller** (two buttons or more), or with `PadOpenShortcut` in `ModActivator.ini` (`None` for off). With `HookXInput=0` the shortcut still works, but the game sees those buttons too.
 
 In the panel, the d-pad or left stick moves between items, A presses, B backs out of a field or a list, and LB or RB pressed on its own goes to the previous or next tab. Mod menus and toggles are still opened with their keyboard shortcuts, which ModActivator sends for you.
 

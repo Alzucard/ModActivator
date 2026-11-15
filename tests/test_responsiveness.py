@@ -18,6 +18,10 @@ with TemporaryDirectory(dir='build') as tmp:
     assert result == 0, f'Drag-and-drop regression check failed at step {result}'
 print("PASS: mouse drag reorders cards, saves the result, and supports moving back up.")
 
+result = m.ModActivatorSendTest()
+assert result == 0, f'Send in Hotkeys did not take the click (step {result})'
+print("PASS: Send in Hotkeys takes the click over its row.")
+
 result = m.ModActivatorGroupsTest()
 assert result == 0, f'Grouped bindings regression check failed at step {result}'
 print("PASS: groups collapse by default, expand on search, and keep related bindings together.")

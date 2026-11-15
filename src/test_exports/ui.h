@@ -113,7 +113,7 @@ extern "C" __declspec(dllexport) int ModActivatorDragTest(const char *root) {
     const auto source = cards.front()->Pos;
     const auto target = cards.back()->Pos;
     const float bottom = target.y + cards.back()->Size.y - 10;
-    io.AddMousePosEvent(source.x + 24, source.y + 25);
+    io.AddMousePosEvent(source.x + 16, source.y + 15); // on the drag handle
     frame();
     io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
     frame();
@@ -147,6 +147,68 @@ extern "C" __declspec(dllexport) int ModActivatorDragTest(const char *root) {
   folder.clear();
   previewMode = false;
   ml::State::Get().menuOpen = false;
+  ImGui::DestroyContext(context);
+  return result;
+}
+
+// Send in Hotkeys takes the click: the row's selectable spans the Send
+// column, and without AllowOverlap it took every click there.
+extern "C" __declspec(dllexport) int ModActivatorSendTest() {
+  if (!folder.empty())
+    return -1;
+  auto *context = ImGui::CreateContext();
+  auto &io = ImGui::GetIO();
+  io.DisplaySize = ImVec2(1000, 860);
+  io.DeltaTime = 1.0f / 60;
+  io.IniFilename = nullptr;
+  ml::gui::InitStyle(1.0f);
+  unsigned char *pixels;
+  int width, height;
+  io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+  {
+    std::lock_guard<std::mutex> lock(catalogMutex);
+    Action a{"Weather", "Weather.asi", "Weather.ini", "Input", "ToggleKey"};
+    a.cachedKeys = {VK_F9};
+    a.toggle = true;
+    catalog = {a};
+    allBindings = {a};
+    pendingActions.clear();
+  }
+  catalogChanged();
+  ++layoutVersion;
+  previewMode = true;
+  previewTab = 2;
+  ml::State::Get().menuOpen = true;
+  const auto frame = [] {
+    ImGui::NewFrame();
+    ml::gui::Render();
+    ImGui::Render();
+  };
+  frame();
+  frame();
+  frame();
+  int result = 1;
+  if (lastSendButton.GetWidth() > 0) {
+    const ImVec2 centre = lastSendButton.GetCenter();
+    io.AddMousePosEvent(centre.x, centre.y);
+    for (int i = 0; i < 4; ++i) // the mouse rests on it a moment, as a hand does
+      frame();
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    frame();
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    frame();
+    std::lock_guard<std::mutex> lock(catalogMutex);
+    result = pendingActions.size() == 1 && pendingActions.front().key == "ToggleKey" ? 0 : 2;
+  }
+  {
+    std::lock_guard<std::mutex> lock(catalogMutex);
+    catalog.clear();
+    allBindings.clear();
+    pendingActions.clear();
+  }
+  catalogChanged();
+  ++layoutVersion;
+  previewMode = false;
   ImGui::DestroyContext(context);
   return result;
 }
@@ -277,7 +339,7 @@ extern "C" __declspec(dllexport) int ModActivatorTextTest(const char *root) {
     ml::gui::RebuildFonts();
     ml::gui::SetDisplayHeight(2160);
     if (!result && (UI::scale != 1.7f || ImGui::GetStyle().WindowPadding.x != floorf(padding * 1.7f) ||
-                    io.Fonts->ConfigData[0].SizePixels != 17.0f * 1.7f || ml::gui::FontsNeedRebuild()))
+                    io.Fonts->ConfigData[0].SizePixels != ml::gui::baseFontSize * 1.7f || ml::gui::FontsNeedRebuild()))
       result = 9;
     ml::gui::SetDisplayHeight(1080);
     ml::gui::RebuildFonts();

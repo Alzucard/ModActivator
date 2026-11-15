@@ -585,30 +585,42 @@ static bool queueAction(const Action &a, bool closeMenu) {
 }
 static bool queueAction(const Action &a) { return queueAction(a, !a.toggle); }
 namespace ml::gui {
+// The resolution's part of the UI scale: 1 at 1080 lines.
 static float clampScale(float scale) { return (std::max)(0.8f, (std::min)(1.7f, scale)); }
-// Set by SetDisplayHeight when the swapchain's height implies another UI
-// scale; applied, with the fonts, by RebuildFonts between frames.
+// The text size at scale 1: a desktop tool's, like ReShade's, not a TV's.
+static constexpr float baseFontSize = 14.0f;
+// The radial menu's text, larger: it is read at a glance over the game.
+static constexpr float radialFontSize = 17.0f;
+// The resolution's scale, times the UI size chosen in Settings.
+static float effectiveScale(float display) { return clampScale(display) * uiSize.load() / 100.0f; }
+static float displayScale = 1.0f;
+// Set by SetDisplayHeight when the swapchain's height, or the UI size,
+// implies another UI scale; applied, with the fonts, by RebuildFonts between
+// frames.
 static float pendingScale = 0;
 // The menu window was sized for the old scale; size it again once.
 static bool resizeWindow = false;
+// The panel's size when it first opens, at scale 1.
+static constexpr float panelWidth = 640, panelHeight = 520;
 
 static void ApplyStyle(float scale) {
-  UI::scale = clampScale(scale);
+  UI::scale = scale;
   // From defaults every time: ScaleAllSizes multiplies what is there, so
   // rescaling the previous style would compound.
   ImGui::GetStyle() = ImGuiStyle();
   ImGui::StyleColorsDark();
   auto &style = ImGui::GetStyle();
-  style.WindowPadding = {22, 20};
-  style.FramePadding = {12, 8};
-  style.ItemSpacing = {10, 10};
-  style.ItemInnerSpacing = {8, 6};
-  style.CellPadding = {10, 4};
-  style.WindowRounding = 12;
-  style.ChildRounding = 8;
-  style.FrameRounding = 6;
-  style.TabRounding = 6;
-  style.ScrollbarRounding = 8;
+  style.WindowPadding = {10, 10};
+  style.FramePadding = {8, 4};
+  style.ItemSpacing = {8, 6};
+  style.ItemInnerSpacing = {6, 4};
+  style.CellPadding = {6, 3};
+  style.WindowRounding = 6;
+  style.ChildRounding = 4;
+  style.FrameRounding = 3;
+  style.TabRounding = 3;
+  style.GrabRounding = 3;
+  style.ScrollbarRounding = 6;
   style.ScrollbarSize = 10;
   style.WindowBorderSize = 1;
   style.ChildBorderSize = 1;
@@ -691,45 +703,52 @@ static void BuildFonts() {
                ? std::string()
                : narrowText(path.c_str(), (int)path.size(), CP_UTF8);
   };
-  const float size = 17.0f * UI::scale;
+  if (!UI::extraGlyphs.empty()) {
+    ImFontGlyphRangesBuilder extra;
+    for (const ImWchar c : UI::extraGlyphs)
+      extra.AddChar(c);
+    extraRanges.clear();
+    extra.BuildRanges(&extraRanges);
+  }
   const auto segoe = fontPath("segoeui.ttf");
-  if (segoe.empty() || !io.Fonts->AddFontFromFileTTF(segoe.c_str(), size, nullptr, mainRanges.Data)) {
-    ImFontConfig fallback;
-    fallback.SizePixels = size;
-    io.Fonts->AddFontDefault(&fallback);
-  }
-  if (UI::extraGlyphs.empty())
-    return;
-
-  ImFontGlyphRangesBuilder extra;
-  for (const ImWchar c : UI::extraGlyphs)
-    extra.AddChar(c);
-  extraRanges.clear();
-  extra.BuildRanges(&extraRanges);
-  // Merged fonts only add what the fonts before them lack, so Segoe UI keeps
-  // every glyph it has and each fallback fills in its own script.
-  for (const auto &group : fallbackGroups()) {
-    const bool needed = std::any_of(UI::extraGlyphs.begin(), UI::extraGlyphs.end(), [&](ImWchar c) {
-      return std::any_of(group.blocks.begin(), group.blocks.end(),
-                         [&](const auto &block) { return c >= block.first && c <= block.second; });
-    });
-    if (!needed)
-      continue;
-    for (const char *file : group.files) {
-      const auto path = fontPath(file);
-      if (path.empty())
-        continue;
-      ImFontConfig merge;
-      merge.MergeMode = true;
-      merge.OversampleH = 1; // dense scripts: half the atlas, no visible cost at this size
-      if (io.Fonts->AddFontFromFileTTF(path.c_str(), size, &merge, extraRanges.Data))
-        break;
+  const auto addFont = [&](float size) {
+    if (segoe.empty() || !io.Fonts->AddFontFromFileTTF(segoe.c_str(), size, nullptr, mainRanges.Data)) {
+      ImFontConfig fallback;
+      fallback.SizePixels = size;
+      io.Fonts->AddFontDefault(&fallback);
     }
-  }
+    if (UI::extraGlyphs.empty())
+      return;
+    // Merged fonts only add what the fonts before them lack, so Segoe UI keeps
+    // every glyph it has and each fallback fills in its own script.
+    for (const auto &group : fallbackGroups()) {
+      const bool needed = std::any_of(UI::extraGlyphs.begin(), UI::extraGlyphs.end(), [&](ImWchar c) {
+        return std::any_of(group.blocks.begin(), group.blocks.end(),
+                           [&](const auto &block) { return c >= block.first && c <= block.second; });
+      });
+      if (!needed)
+        continue;
+      for (const char *file : group.files) {
+        const auto path = fontPath(file);
+        if (path.empty())
+          continue;
+        ImFontConfig merge;
+        merge.MergeMode = true;
+        merge.OversampleH = 1; // dense scripts: half the atlas, no visible cost at this size
+        if (io.Fonts->AddFontFromFileTTF(path.c_str(), size, &merge, extraRanges.Data))
+          break;
+      }
+    }
+  };
+  // The panel's font, then the radial menu's: the ring is read at a glance
+  // in the middle of the game, so its text is larger than the panel's.
+  addFont(baseFontSize * UI::scale);
+  addFont(radialFontSize * UI::scale);
 }
 
 void InitStyle(float scale) {
-  ApplyStyle(scale);
+  displayScale = scale;
+  ApplyStyle(effectiveScale(scale));
   ImGui::GetIO().IniFilename = nullptr;
   BuildFonts();
   UI::glyphsChanged = false;
@@ -738,7 +757,8 @@ void InitStyle(float scale) {
 void SetDisplayHeight(float height) {
   if (height <= 0)
     return;
-  const float scale = clampScale(height / 1080.0f);
+  displayScale = height / 1080.0f;
+  const float scale = effectiveScale(displayScale);
   pendingScale = fabsf(scale - UI::scale) > 0.01f ? scale : 0;
 }
 bool FontsNeedRebuild() { return UI::glyphsChanged || pendingScale > 0; }
@@ -1021,34 +1041,41 @@ static void renderPanel() {
   auto &s = State::Get();
   auto &io = ImGui::GetIO();
   float u = UI::scale;
-  ImVec2 size{(std::min)(820 * u, io.DisplaySize.x - 32),
-              (std::min)(740 * u, io.DisplaySize.y - 32)};
+  ImVec2 size{(std::min)(panelWidth * u, io.DisplaySize.x - 32),
+              (std::min)(panelHeight * u, io.DisplaySize.y - 32)};
   ImGui::SetNextWindowSize(size, resizeWindow ? ImGuiCond_Always : ImGuiCond_FirstUseEver);
   resizeWindow = false;
   ImGui::SetNextWindowSizeConstraints(
-      ImVec2((std::min)(540 * u, size.x), (std::min)(440 * u, size.y)),
+      ImVec2((std::min)(460 * u, size.x), (std::min)(340 * u, size.y)),
       ImVec2(io.DisplaySize.x - 16, io.DisplaySize.y - 16));
   bool open = s.menuOpen.load();
   const bool wasOpen = open;
   if (ImGui::Begin("ModActivator##Main", &open,
                    ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
                        ImGuiWindowFlags_NoScrollbar)) {
+    // One line: name, version, search, Refresh and close.
+    ImGui::AlignTextToFramePadding();
     ImGui::TextColored(UI::gold, "MODACTIVATOR");
     ImGui::SameLine();
     ImGui::TextDisabled("%s", MODACTIVATOR_VERSION);
-    ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - 38 * u);
-    if (ImGui::SmallButton(" X "))
-      open = false;
-    ImGui::TextDisabled("In-game mod controls");
-    ImGui::Spacing();
-    ImGui::SetNextItemWidth(
-        (std::max)(180.0f, ImGui::GetContentRegionAvail().x - 126 * u));
+    ImGui::SameLine();
+    const float frame = ImGui::GetFrameHeight();
+    const float refreshWidth = ImGui::CalcTextSize("Refresh").x + ImGui::GetStyle().FramePadding.x * 2;
+    const float spacing = ImGui::GetStyle().ItemSpacing.x;
+    ImGui::SetNextItemWidth((std::max)(120 * u, ImGui::GetContentRegionAvail().x - refreshWidth - frame - spacing * 2));
     if (ImGui::InputTextWithHint("##Search", "Search mods or shortcuts...",
                                  UI::search, sizeof UI::search))
       UI::noteGlyphs(std::string(UI::search)); // typed text can be in any script
     ImGui::SameLine();
-    if (ImGui::Button("Refresh", ImVec2(112 * u, 0)))
+    if (ImGui::Button("Refresh"))
       refreshRequested.store(true);
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("Look for mods and read their configs again.");
+    ImGui::SameLine();
+    if (ImGui::Button("X", ImVec2(frame, frame)))
+      open = false;
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("Close (%s)", shortcutLabel(openerKeys()).c_str());
     const auto &snap = menuSnapshot();
     const auto &actions = snap.actions;
     std::map<int, std::string> tabs{{0, "Mod menus"}, {1, "Toggles"}, {2, "Hotkeys"}};
@@ -1056,7 +1083,6 @@ static void renderPanel() {
     constexpr int settingsTab = 65536;
     tabs.emplace(settingsTab, "Settings");
     const auto &counts = snap.counts;
-    ImGui::Spacing();
     if (ImGui::BeginTabBar("Categories",
                            ImGuiTabBarFlags_NoCloseWithMiddleMouseButton |
                                ImGuiTabBarFlags_FittingPolicyScroll)) {
@@ -1077,12 +1103,19 @@ static void renderPanel() {
         const std::string count = tab == 2 || tab == settingsTab
                                       ? "" : "  " + std::to_string(counted == counts.end() ? 0 : counted->second);
         const std::string title = name + count + "###Category" + std::to_string(tab);
-        if (ImGui::BeginTabItem(title.c_str(), nullptr,
-                                (previewMode && previewTab == tab) || padTab == tab
-                                    ? ImGuiTabItemFlags_SetSelected
-                                    : 0)) {
+        // The + comes after your own tabs, before Settings.
+        if (tab == settingsTab)
+          newTabButton();
+        const bool shown = ImGui::BeginTabItem(
+            title.c_str(), nullptr,
+            (previewMode && (std::min)(previewTab, settingsTab) == tab) || padTab == tab || (tabToSelect && tabToSelect == tab)
+                ? ImGuiTabItemFlags_SetSelected
+                : 0);
+        if (tab >= firstCustomTab && tab < settingsTab)
+          tabContextClick(tab);
+        if (shown) {
           if (lastTab != tab) {
-            UI::recording = 0;
+            stopRecording();
             lastTab = tab;
           }
           if (tab == 2 || tab == settingsTab) {
@@ -1093,10 +1126,8 @@ static void renderPanel() {
             ImGui::EndTabItem();
             continue;
           }
-          ImGui::Spacing();
-          ImGui::TextDisabled("Drag the handle on a mod to reorder it.");
-          ImGui::Spacing();
-          ImGui::BeginChild("ModList", ImVec2(0, -34 * u), ImGuiChildFlags_NavFlattened);
+          const float footer = ImGui::GetTextLineHeight() + ImGui::GetStyle().ItemSpacing.y * 2 + 1;
+          ImGui::BeginChild("ModList", ImVec2(0, -footer), ImGuiChildFlags_NavFlattened);
           int count = 0;
           PlacementDrop drop;
           static bool reorderFailed = false;
@@ -1108,29 +1139,27 @@ static void renderPanel() {
             ++count;
             ImGui::PushID(cachedIdentity(a).c_str());
             const bool managed = card.managed, restart = card.restart;
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12 * u, 5 * u));
-            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(10 * u, 3 * u));
+            // One line per mod: handle, name, shortcut, ring button, action.
+            const float frame = ImGui::GetFrameHeight();
+            const float padY = 4 * u, cardHeight = frame + padY * 2;
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6 * u, padY));
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8 * u, 0));
             // The list owns scrolling, including when the cursor is over a card.
-            ImGui::BeginChild("Card", ImVec2(0, 55 * u),
+            ImGui::BeginChild("Card", ImVec2(0, cardHeight),
                               ImGuiChildFlags_Borders | ImGuiChildFlags_NavFlattened,
                               ImGuiWindowFlags_NoScrollbar |
                                   ImGuiWindowFlags_NoScrollWithMouse);
             const float top = ImGui::GetCursorPosY();
             const float handleX = ImGui::GetCursorPosX();
-            ImGui::SetCursorPosY(top + 5 * u);
-            dragHandle(a, 31 * u);
+            dragHandle(a, frame);
             const bool overHandle = ImGui::IsItemHovered();
-            const float labelX = handleX + 41 * u;
-            ImGui::SetCursorPos(ImVec2(labelX, top));
-            const float buttonX = ImGui::GetWindowContentRegionMax().x - 110 * u;
-            const float pinX = buttonX - 39 * u;
-            const float textWidth = pinX - ImGui::GetCursorPosX() - 8 * u;
-            ImGui::PushClipRect(ImGui::GetCursorScreenPos(),
-                                ImVec2(ImGui::GetCursorScreenPos().x + textWidth,
-                                       ImGui::GetWindowPos().y + 55 * u), true);
+            const float labelX = handleX + frame + 8 * u;
+            const float buttonWidth = 76 * u;
+            const float buttonX = ImGui::GetWindowContentRegionMax().x - buttonWidth;
+            const float pinX = buttonX - frame - 6 * u;
+            const float textRight = pinX - 8 * u;
+            const float textY = top + ImGui::GetStyle().FramePadding.y;
             const auto title = card.several ? UI::name(a) + " - " + UI::actionName(a) : UI::name(a);
-            ImGui::TextUnformatted(title.c_str());
-            ImGui::SetCursorPosX(labelX);
             std::string detail = UI::shortcut(a);
             if (restart)
               detail += "  |  Restart required";
@@ -1138,22 +1167,33 @@ static void renderPanel() {
               detail += "  |  Managed by ModHub";
             else if (a.toggle)
               detail += "  |  State unavailable";
-            ImGui::TextDisabled("%s", detail.c_str());
-            ImGui::PopClipRect();
-            ImGui::SetCursorPos(ImVec2(buttonX, top + 5 * u));
+            {
+              // The name, then the shortcut muted after it, both cut at the
+              // ring button.
+              const ImVec2 origin = ImGui::GetWindowPos();
+              const float scrollY = ImGui::GetScrollY();
+              auto *list = ImGui::GetWindowDrawList();
+              const ImVec2 at(origin.x + labelX, origin.y + textY - scrollY);
+              list->PushClipRect(at, ImVec2(origin.x + textRight, at.y + ImGui::GetTextLineHeight() + 2), true);
+              list->AddText(at, ImGui::GetColorU32(ImGuiCol_Text), title.c_str());
+              const float titleWidth = ImGui::CalcTextSize(title.c_str()).x;
+              list->AddText(ImVec2(at.x + titleWidth + 12 * u, at.y), ImGui::GetColorU32(ImGuiCol_TextDisabled),
+                            detail.c_str());
+              list->PopClipRect();
+            }
+            ImGui::SetCursorPos(ImVec2(buttonX, top));
             ImGui::BeginDisabled(!card.loaded || managed || restart);
-            if (ImGui::Button(a.toggle ? "Toggle" : "Open menu",
-                              ImVec2(110 * u, 31 * u))) {
+            if (ImGui::Button(a.toggle ? "Toggle" : "Open", ImVec2(buttonWidth, frame))) {
               if (queueAction(a) && !a.toggle)
                 open = false;
             }
             ImGui::EndDisabled();
             bool overButtons = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled);
             // On the radial menu or not: a ring, filled gold when pinned.
-            ImGui::SetCursorPos(ImVec2(pinX, top + 5 * u));
+            ImGui::SetCursorPos(ImVec2(pinX, top));
             const auto &id = cachedIdentity(a);
             const bool pinned = radialPinned(id);
-            if (ImGui::Button("##Radial", ImVec2(31 * u, 31 * u))) {
+            if (ImGui::Button("##Radial", ImVec2(frame, frame))) {
               if (toggleRadialPin(id))
                 radialNote = pinned ? "Taken off the radial menu." : "Pinned to the radial menu.";
               else
@@ -1166,8 +1206,8 @@ static void renderPanel() {
               const auto min = ImGui::GetItemRectMin(), max = ImGui::GetItemRectMax();
               const ImVec2 mid((min.x + max.x) / 2, (min.y + max.y) / 2);
               auto *list = ImGui::GetWindowDrawList();
-              const float r = 9 * u;
-              list->AddCircle(mid, r, ImGui::GetColorU32(pinned ? UI::gold : UI::muted), 24, 2.0f * u);
+              const float r = frame * 0.28f;
+              list->AddCircle(mid, r, ImGui::GetColorU32(pinned ? UI::gold : UI::muted), 24, 1.5f * u);
               if (pinned)
                 list->AddCircleFilled(mid, r * 0.45f, ImGui::GetColorU32(UI::gold), 16);
             }
@@ -1201,12 +1241,15 @@ static void renderPanel() {
           else if (!radialNote.empty() && GetTickCount() - radialNoteAt < 4000)
             ImGui::TextDisabled("%s", radialNote.c_str());
           else
-            ImGui::TextDisabled("%s to close", shortcutLabel(openerKeys()).c_str());
+            ImGui::TextDisabled("Drag the handle to reorder  \xc2\xb7  Ring button pins to the radial menu  \xc2\xb7  %s closes",
+                                shortcutLabel(openerKeys()).c_str());
           ImGui::EndTabItem();
         }
       }
       ImGui::EndTabBar();
+      tabToSelect = 0;
     }
+    drawTabPopups();
   }
   // A mod menu opened from a card, or from Send in Hotkeys, closes the panel
   // through queueAction during the frame, so the menu's window gets the

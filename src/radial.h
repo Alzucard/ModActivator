@@ -221,8 +221,9 @@ static std::vector<std::string> wrapText(ImFont *font, float size, const std::st
 static void drawRadial() {
   auto &io = ImGui::GetIO();
   auto *draw = ImGui::GetForegroundDrawList();
-  ImFont *font = ImGui::GetFont();
-  const float base = ImGui::GetFontSize();
+  // The ring's own, larger font (BuildFonts adds it after the panel's).
+  ImFont *font = io.Fonts->Fonts.Size > 1 ? io.Fonts->Fonts[1] : ImGui::GetFont();
+  const float base = font->FontSize;
   const DWORD now = GetTickCount();
   float alpha = radial.open ? (std::min)(1.0f, (now - radial.openedAt) / float(radialFadeMs))
                             : 1.0f - (std::min)(1.0f, (now - radial.closedAt) / float(radialFadeMs));
