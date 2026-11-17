@@ -57,3 +57,34 @@ assert scan(root,'Opaque.asi') == ''
 fn = toggle_scan
 assert scan(root,'Opaque.asi') == ''
 print('PASS: nearby comments, ambiguous names, and persisted binding-type overrides.')
+
+# DesertLink's all-in-one menu keeps its INI text, UTF-16 with a BOM, in
+# DesertLinkData/ModMenu/Settings.dat: no .ini, and no folder named like the
+# mod. A .dat that is not INI text is never read as settings.
+(root/'ModActivator.User.ini').write_text('')
+menu=root/'DesertLinkData'/'ModMenu';menu.mkdir(parents=True,exist_ok=True)
+(menu/'Settings.dat').write_bytes('\r\n[EditorPanel]\r\nOpenKeyVk=NONE\r\nOpenKey2Vk=113\r\nOpenKey2WithVk=16\r\n[FlashControls]\r\nToggleKey=F10\r\n[General]\r\nOpenKeyVk=45\r\n'.encode('utf-16'))
+(menu/'recovery.dat').write_bytes(b'\x00\x01[General]\nOpenKeyVk=46\n')
+(root/'DesertLinkModMenu.dat').write_bytes(b'\x89PNG[General]\nOpenKeyVk=47\n')
+fn=m.ModActivatorDiscoveryTest
+r=scan(root,'DesertLinkModMenu.asi')
+assert r=='DesertLinkModMenu.asi|DesertLinkData/ModMenu/Settings.dat|General|OpenKeyVk|45,\n',r
+fn=toggle_scan
+for known in (1,0): # the folders find the file without the known-mods entry
+ m.ModActivatorUseKnownModsTest(known)
+ assert 'DesertLinkModMenu.asi|DesertLinkData/ModMenu/Settings.dat|FlashControls|ToggleKey|121,' in scan(root,'DesertLinkModMenu.asi'),known
+m.ModActivatorUseKnownModsTest(0)
+fn=m.ModActivatorDiscoveryTest
+# A [General] OpenKeyVk is a menu key only where the known-mods list says so.
+assert scan(root,'DesertLinkModMenu.asi')==''
+m.ModActivatorUseKnownModsTest(1)
+shutil.rmtree(root/'DesertLinkData');(root/'DesertLinkModMenu.dat').unlink()
+# Near misses: one FooData folder, folders that spell only part of the name,
+# or more than it, belong to no mod. A .cfg with INI text is read.
+fn=toggle_scan
+for path in ['SpellData/a.ini','SpellModData/a.ini','Desert/LinkMore/a.ini','Desert/LinkData/b.ini','Spell/a.cfg']:
+ f=root/path;f.parent.mkdir(parents=True,exist_ok=True);f.write_text('[Hotkeys]\nToggleKey=F9\n')
+r=scan(root,'Spell.asi;SpellMod.asi;DesertLink.asi;DesertLinkMoreX.asi')
+assert r=='DesertLink.asi|Desert/LinkData/b.ini|Hotkeys|ToggleKey|120,\nSpell.asi|Spell/a.cfg|Hotkeys|ToggleKey|120,\n',r
+for d in ['SpellData','Spell','SpellModData','Desert']:shutil.rmtree(root/d)
+print('PASS: INI text in a .dat or .cfg, found through two folders that spell the mod name, and no near misses.')

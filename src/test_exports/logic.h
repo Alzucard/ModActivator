@@ -858,10 +858,66 @@ extern "C" __declspec(dllexport) int ModActivatorRadialTest(const char *root) {
     const uint8_t rip[] = {0x10, 0x00, 0x00, 0x00};
     if (gameSpeed::ripTarget(data + 4, rip) != data + 20)
       return 12;
+    // The pinned cards come from the mod list. The first frame asks for it,
+    // so the ring has them without the panel ever opening, and a ring opened
+    // before the list was read fills in as soon as it is.
+    using ml::gui::radial;
+    {
+      std::lock_guard<std::mutex> lock(catalogMutex);
+      catalog.clear();
+    }
+    catalogChanged();
+    // Nothing pinned: no reading at start.
+    radialSlots.clear();
+    refreshRequested.store(false);
+    radial = {};
+    ml::gui::radialCatalogRequested = false;
+    ml::gui::pollRadial(false, false);
+    if (refreshRequested.load() || ml::gui::radialCatalogRequested)
+      return 13;
+    radialSlots = {"pin.ini|menu|key"};
+    ml::gui::pollRadial(false, false);
+    if (!refreshRequested.exchange(false) || radial.open)
+      return 13;
+    ml::gui::fillRadialEntries();
+    if (!radial.entries.empty() || radial.catalog != catalogVersion.load())
+      return 14;
+    radial.open = true;
+    {
+      std::lock_guard<std::mutex> lock(catalogMutex);
+      catalog.push_back(Action{"Pin - Menu / Key", "Pin.asi", "Pin.ini", "Menu", "Key"});
+    }
+    catalogChanged();
+    // A choice made on the old wedges is dropped: it would name another card.
+    radial.selected = 0;
+    ml::gui::pollRadial(true, true); // fills in, then closes: the key is not held
+    const bool filled = radial.entries.size() == 1 && radial.entries[0].action.file == "Pin.ini";
+    if (!filled || radial.open || radial.selected != -1) {
+      std::lock_guard<std::mutex> lock(catalogMutex);
+      catalog.clear();
+      return 15;
+    }
+    // "Looking for your mods" lasts until the ring is filled from a finished
+    // read, found or failed, and not a frame longer.
+    const unsigned readAt = catalogReadAt.exchange(0);
+    const bool waiting = ml::gui::radialReading();
+    {
+      std::lock_guard<std::mutex> lock(catalogMutex);
+      catalog.clear();
+      catalogReadDone();
+    }
+    const bool landed = ml::gui::radialReading();
+    ml::gui::fillRadialEntries();
+    const bool after = ml::gui::radialReading();
+    catalogReadAt.store(readAt);
+    if (!waiting || !landed || after)
+      return 16;
     return 0;
   }();
   folder.clear();
   radialSlots.clear();
+  ml::gui::radial = {};
+  ml::gui::radialCatalogRequested = false;
   radialKeyText = "Grave";
   padRadial.store(defaultPadRadial);
   ml::State::Get().padRadial.store(0);

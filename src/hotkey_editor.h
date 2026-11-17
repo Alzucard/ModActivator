@@ -121,8 +121,8 @@ static std::string encodeBinding(const Action &a, std::string input,
     throw std::runtime_error("This mod's shortcut format cannot represent the recorded key.");
   return converted;
 }
-static std::string replaceValue(const std::string &bytes, const Action &a,
-                                const std::string &value) {
+static std::string replaceValueText(const std::string &bytes, const Action &a,
+                                    const std::string &value) {
   if (bytes.size() > 1024 * 1024 || bytes.find('\0') != bytes.npos)
     throw std::runtime_error("Config format unsupported by editor.");
   std::string result = bytes, section;
@@ -168,6 +168,42 @@ static std::string replaceValue(const std::string &bytes, const Action &a,
         "Missing or duplicate setting; edit the config manually.");
   result.replace(begin, finish - begin, value);
   return result;
+}
+// UTF-16 LE text with a BOM, as the profile API reads it (DesertLink keeps
+// its settings so), is edited as UTF-8 and written back as UTF-16 LE. Only
+// when that round trip gives back the very same file: anything else, big
+// endian or a broken character, is refused as before.
+static std::string replaceValue(const std::string &bytes, const Action &a,
+                                const std::string &value) {
+  if (bytes.compare(0, 2, "\xff\xfe") != 0)
+    return replaceValueText(bytes, a, value);
+  const auto unsupported = [] { return std::runtime_error("Config format unsupported by editor."); };
+  if (bytes.size() % 2 || bytes.size() > 2 * 1024 * 1024)
+    throw unsupported();
+  std::wstring wide((bytes.size() - 2) / 2, L'\0');
+  memcpy(wide.data(), bytes.data() + 2, wide.size() * sizeof(wchar_t));
+  const auto toWide = [&](const std::string &text) {
+    std::wstring out;
+    if (text.empty())
+      return out;
+    const int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), (int)text.size(), nullptr, 0);
+    if (n <= 0)
+      throw unsupported();
+    out.resize(n);
+    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), (int)text.size(), out.data(), n);
+    return out;
+  };
+  const auto text = narrowText(wide.data(), (int)wide.size(), CP_UTF8);
+  if (toWide(text) != wide)
+    throw unsupported();
+  // The profile API spells section and key names in the ANSI code page.
+  Action named = a;
+  named.section = convertText(a.section, CP_ACP, CP_UTF8);
+  named.key = convertText(a.key, CP_ACP, CP_UTF8);
+  const auto updated = toWide(replaceValueText(text, named, value));
+  std::string out = "\xff\xfe";
+  out.append(reinterpret_cast<const char *>(updated.data()), updated.size() * sizeof(wchar_t));
+  return out;
 }
 static bool saveBinding(const Action &a, const std::string &expected,
                         const std::string &value) {

@@ -14,11 +14,16 @@ r,msg,out=edit('Stale.ini',route,'SettingsWindow','ManageLocationsHotkey','F4',b
 r,msg,out=edit('ReShade.ini',b'[INPUT]\nKeyOverlay=36,0,0,0\n','INPUT','KeyOverlay','F4');assert r
 r,msg,out=edit('Duplicate.ini',b'[Menu]\nHotkey=F4\nHotkey=F5\n','Menu','Hotkey','F6');assert r
 # UTF-16 bytes cannot pass through c_char_p, so the editor is told to use the
-# file as it is (None) and must refuse it as a format it cannot edit.
-unicode=b'[Menu]\nHotkey=F4\n'.decode().encode('utf-16')
+# file as it is (None). UTF-16 LE with a BOM is edited in place and stays
+# UTF-16 LE; big endian, or a broken character, is refused untouched.
+unicode='﻿; Ünïcode note\r\n[Menu]\r\nHotkey=F4 ; keep\r\n'.encode('utf-16-le')
 r,msg,out=edit('Unicode.ini',unicode,'Menu','Hotkey','F6',ON_DISK)
-assert r and 'unsupported' in msg and out==unicode,(r,msg)
-print('PASS: exact/modifier conflicts; numeric/hex encoding; comments and CRLF; modifier retention; controller suffix; original backup; stale-edit refusal; duplicate/UTF16/ReShade protection.')
+assert not r and out==unicode.replace('F4'.encode('utf-16-le'),'F6'.encode('utf-16-le')),(r,msg,out)
+for name,data in [('BigEndian.ini','﻿[Menu]\nHotkey=F4\n'.encode('utf-16-be')),
+                  ('Broken.ini','﻿[Menu]\nHotkey=F4\n'.encode('utf-16-le')+b'\x00\xd8')]:
+ r,msg,out=edit(name,data,'Menu','Hotkey','F6',ON_DISK)
+ assert r and 'unsupported' in msg and out==data,(name,r,msg)
+print('PASS: exact/modifier conflicts; numeric/hex encoding; comments and CRLF; modifier retention; controller suffix; original backup; stale-edit refusal; UTF-16 LE edits in place; duplicate/big-endian/broken UTF-16/ReShade protection.')
 
 for new in ['F4+F5','F5+Ctrl','Ctrl+Ctrl+F5','119']:
  r,msg,out=edit('InvalidNamed.ini',b'[Menu]\nHotkey=Ctrl+F4\n','Menu','Hotkey',new)

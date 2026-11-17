@@ -26,7 +26,19 @@ static struct RadialState {
   int selected = -1;
   float lastX = 0, lastY = 0;
   std::vector<RadialEntry> entries;
+  unsigned catalog = 0; // catalogVersion the entries were filled from
 } radial;
+// Whether pollRadial has asked for the mods to be read this session. Not a
+// function static, so the tests can start over.
+static bool radialCatalogRequested = false;
+// Whether the pinned cards may still be on their way: the entries were filled
+// before the first read finished. Judged from what the entries were filled
+// from, not the live state, so a read that lands mid-frame shows once the
+// ring has refilled from it.
+static bool radialReading() {
+  const unsigned readAt = catalogReadAt.load();
+  return !radialSlots.empty() && (!readAt || radial.catalog < readAt);
+}
 
 static constexpr DWORD radialFadeMs = 120;
 
@@ -73,6 +85,7 @@ static float radialFrameSeconds() {
 // mod is not loaded this time) are left out.
 static void fillRadialEntries() {
   const auto &snap = menuSnapshot();
+  radial.catalog = snap.catalog;
   radial.entries.clear();
   for (const auto &id : radialSlots)
     for (size_t i = 0; i < snap.actions.size(); ++i)
@@ -135,8 +148,27 @@ static void pollRadial(bool foreground, bool accepts) {
   if (radialPause.load() && gameSpeed::status.load() == gameSpeed::notSearched &&
       GetTickCount() - firstPoll > 15000)
     gameSpeed::prepare();
+  // The mods are looked for on the first frame, when every plugin has
+  // loaded, not only when the panel opens: the radial's pinned cards come
+  // from the same list, and without it none would show.
+  // Only with something pinned: pinning happens in the panel, which reads
+  // the mods when it opens anyway.
+  if (!radialCatalogRequested && !radialSlots.empty()) {
+    radialCatalogRequested = true;
+    refreshRequested.store(true);
+  }
   bool viaPad = false;
   const bool now = radialHeld(&viaPad);
+  // Opened before the list was read (or while it is read again): the cards
+  // appear as soon as it is there.
+  if (radial.open && catalogVersion.load() != radial.catalog) {
+    fillRadialEntries();
+    // The wedges moved: the old index may name another mod now. The mouse
+    // chooses again from where it is, below; a stick choice is dropped
+    // until the stick is pushed again.
+    radial.selected = -1;
+    radial.lastX = radial.lastY = NAN;
+  }
   if (radial.open) {
     if (!foreground)
       closeRadial(false, "the game window losing focus");
@@ -242,9 +274,12 @@ static void drawRadial() {
   const int count = (int)radial.entries.size();
 
   if (!count) {
+    const bool reading = radialReading();
     const char *line = radialSlots.empty() ? "Nothing pinned to the radial menu yet."
+                       : reading           ? "Looking for your mods..."
                                            : "None of your pinned mods are loaded.";
-    const char *hint = "Pin mods from the panel: the ring button on a card.";
+    const char *hint = reading ? "Your pinned cards appear here in a moment."
+                               : "Pin mods from the panel: the ring button on a card.";
     const auto a = font->CalcTextSizeA(base, FLT_MAX, 0, line), b = font->CalcTextSizeA(base * 0.85f, FLT_MAX, 0, hint);
     const float width = (std::max)(a.x, b.x) + base * 2, height = a.y + b.y + base * 1.6f;
     const ImVec2 min(centre.x - width / 2, centre.y - height / 2), max(centre.x + width / 2, centre.y + height / 2);

@@ -12,6 +12,15 @@ static std::atomic<bool> refreshRequested{false};
 // copies them once per change instead of every frame.
 static std::atomic<unsigned> catalogVersion{1};
 static void catalogChanged() { catalogVersion.fetch_add(1); }
+// The catalogVersion of refresh()'s first finished read, found or failed;
+// 0 before it. A copy of the catalog at this version or later has been read.
+// Set under catalogMutex, before the version it names is published.
+static std::atomic<unsigned> catalogReadAt{0};
+static void catalogReadDone() {
+  if (!catalogReadAt.load())
+    catalogReadAt.store(catalogVersion.load() + 1);
+  catalogChanged();
+}
 static std::string lower(std::string s) {
   for (auto &c : s)
     c = (char)tolower((unsigned char)c);
@@ -330,7 +339,55 @@ static std::string moduleFor(const std::filesystem::path &rel,
       if (lower(part.string()) == ms)
         return m;
   }
+  // Two folders that spell the mod's name between them, with "Data" and the
+  // like dropped from each: DesertLinkData/ModMenu/Settings.dat belongs to
+  // DesertLinkModMenu.asi. A single FooData folder is not enough: it is as
+  // likely another tool's or a leftover copy.
+  std::string spelled;
+  int parts = 0;
+  for (const auto &part : rel.parent_path()) {
+    ++parts;
+    auto name = lower(part.string());
+    for (const std::string suffix : {"data", "config", "settings"})
+      if (name.size() > suffix.size() &&
+          name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0) {
+        name.resize(name.size() - suffix.size());
+        break;
+      }
+    spelled += name;
+  }
+  if (parts >= 2)
+    for (auto &m : mods)
+      if (lower(std::filesystem::path(m).stem().string()) == spelled)
+        return m;
   return {};
+}
+// Whether a file holds settings to scan: every .ini, and a .dat or .cfg whose
+// text, UTF-8 or UTF-16 LE, starts with a [section]. DesertLink's all-in-one
+// menu keeps its INI text in DesertLinkData/ModMenu/Settings.dat.
+static bool configFile(const std::filesystem::path &path) {
+  const auto extension = lower(path.extension().string());
+  if (extension == ".ini")
+    return true;
+  if (extension != ".dat" && extension != ".cfg")
+    return false;
+  std::ifstream file(path, std::ios::binary);
+  char head[64]{};
+  file.read(head, sizeof head);
+  const size_t n = static_cast<size_t>(file.gcount());
+  size_t i = 0, step = 1;
+  if (n >= 3 && memcmp(head, "\xef\xbb\xbf", 3) == 0)
+    i = 3;
+  else if (n >= 2 && memcmp(head, "\xff\xfe", 2) == 0)
+    i = 2, step = 2;
+  for (; i < n; i += step) {
+    if (step == 2 && (i + 1 >= n || head[i + 1] != 0))
+      return false;
+    const char c = head[i];
+    if (c != ' ' && c != '\t' && c != '\r' && c != '\n')
+      return c == '[';
+  }
+  return false;
 }
 static std::vector<Action> scanBindings(const std::vector<std::string> &mods,
                                         const std::string &reshade = {}) {
@@ -368,8 +425,7 @@ static std::vector<Action> scanBindings(const std::vector<std::string> &mods,
         it.disable_recursion_pending();
       continue;
     }
-    if (!std::filesystem::is_regular_file(status) ||
-        lower(it->path().extension().string()) != ".ini")
+    if (!std::filesystem::is_regular_file(status) || !configFile(it->path()))
       continue;
     ++files;
     auto rel = it->path().lexically_relative(std::filesystem::path(folder));
@@ -575,8 +631,11 @@ static void refresh() {
   std::vector<std::string> mods;
   std::string reshade;
   HANDLE h = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, GetCurrentProcessId());
-  if (h == INVALID_HANDLE_VALUE)
+  if (h == INVALID_HANDLE_VALUE) {
+    std::lock_guard<std::mutex> lock(catalogMutex);
+    catalogReadDone();
     return;
+  }
   MODULEENTRY32 e{};
   e.dwSize = sizeof e;
   if (Module32First(h, &e))
@@ -604,8 +663,10 @@ static void refresh() {
     catalog = std::move(found);
     allBindings = std::move(all);
     reservedKeys = std::move(reserved);
-    catalogChanged();
+    catalogReadDone();
   } catch (const std::exception &e) {
     LOG_ERR("Discovery failed: %s", e.what());
+    std::lock_guard<std::mutex> lock(catalogMutex);
+    catalogReadDone(); // nothing found, but nothing is being looked for either
   }
 }
