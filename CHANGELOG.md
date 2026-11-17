@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.4.2
+- List **DesertLink All-in-One Mod Menu** (6.x) with its menu (Insert by default), Speedster mode and Instant conquest. It keeps its settings in `DesertLinkData\ModMenu\Settings.dat` instead of an INI, so it was never found.
+- Read settings from a `.dat` or `.cfg` file when it holds INI text (UTF-8 or UTF-16), and tie a config to its mod through two folders that spell the mod's name between them, such as `DesertLinkData\ModMenu` for `DesertLinkModMenu.asi`.
+- Fix the radial menu staying empty until the panel had been opened once. With something pinned, ModActivator now looks for your mods when the game starts; a ring opened before that says it is still looking and fills in as soon as they are found.
+- A choice aimed at the radial menu while it filled in is dropped rather than opening a different card.
+- The Hotkeys editor can now change shortcuts in UTF-16 config files, such as DesertLink's, and keeps them UTF-16. Big-endian files and files with broken characters are still refused.
+
 ## 1.4.1
 - Fix a crash when the radial menu was the first thing opened after starting the game, before the panel had been opened once. The game stopped responding and Crimson Black Box could name whichever mod was loaded beside it, such as HuntersGrip.
 - When the radial menu cannot take over the game's speed, the log now says why.
