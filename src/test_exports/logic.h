@@ -725,6 +725,9 @@ ModActivatorEditorTest(const char *root, const char *file, const char *sec,
   folder = root;
   try {
     Action a{"test", "Fixture.asi", file, sec, field};
+    const auto known = loadKnownMods();
+    if (const auto *mod = knownModFor(known, a))
+      a.noEdit = mod->noEdit;
     auto value = encodeBinding(a, input);
     // A null expected is the file as it is now. A C string cannot carry
     // contents with zero bytes in them, such as a UTF-16 config.

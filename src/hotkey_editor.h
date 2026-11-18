@@ -24,6 +24,10 @@ static std::string encodeBinding(const Action &a, std::string input,
         "Enter one key or combination, such as F6 or Ctrl+F6.");
   if (lower(a.file) == "reshade.ini")
     throw std::runtime_error("Change ReShade shortcuts in its own settings.");
+  // A mod that writes its file back over from memory (@edit in the known-mods
+  // list) would lose an edit made here.
+  if (!a.noEdit.empty())
+    throw std::runtime_error(a.noEdit);
   std::string original = read(a);
   const auto comment = bindingComment(original);
   const auto setting = trim(original.substr(0, comment));
@@ -511,6 +515,9 @@ static void drawHotkeys() {
       saveNote("", "");
     }
     ImGui::Spacing();
+    if (!editing.noEdit.empty())
+      ImGui::TextWrapped("%s", editing.noEdit.c_str());
+    ImGui::BeginDisabled(!editing.noEdit.empty());
     if (auto keys = UI::shortcutField(recorded, width); !keys.empty()) {
       recorded = std::move(keys);
       proposed.clear();
@@ -562,6 +569,7 @@ static void drawHotkeys() {
       if (!picked)
         proposed.clear();
     }
+    ImGui::EndDisabled();
     if (!validationError.empty())
       ImGui::TextWrapped("%s", validationError.c_str());
     if (!proposed.empty()) {

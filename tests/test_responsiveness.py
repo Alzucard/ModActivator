@@ -29,6 +29,10 @@ result = m.ModActivatorSendTest()
 assert result == 0, f'Send in Hotkeys did not take the click (step {result})'
 print("PASS: Send in Hotkeys takes the click over its row.")
 
+result = m.ModActivatorRereadTest()
+assert result == 0, f'Reread mod configs did not ask for a reread (step {result})'
+print("PASS: Settings > Interface > Reread mod configs reads the mods' configs again.")
+
 result = m.ModActivatorGroupsTest()
 assert result == 0, f'Grouped bindings regression check failed at step {result}'
 print("PASS: groups collapse by default, expand on search, and keep related bindings together.")

@@ -12,6 +12,10 @@ route=b'[SettingsWindow]\nManageLocationsHotkey=F8|LeftStick,RightStick,A\nOther
 r,msg,out=edit('Route.ini',route,'SettingsWindow','ManageLocationsHotkey','F4');assert not r and out==route.replace(b'F8|',b'F4|'),msg
 r,msg,out=edit('Stale.ini',route,'SettingsWindow','ManageLocationsHotkey','F4',b'old');assert r and out==route
 r,msg,out=edit('ReShade.ini',b'[INPUT]\nKeyOverlay=36,0,0,0\n','INPUT','KeyOverlay','F4');assert r
+(p/'DesertLinkData/ModMenu').mkdir(parents=True,exist_ok=True) # DesertLink writes this file over from memory
+for sec,key in [('Shortcut.fat_stacks.toggle','Key2'),('General','OpenKeyVk')]:
+ dat=b'[Shortcut.fat_stacks.toggle]\nKey1=17\nKey2=187\n[General]\nOpenKeyVk=45\n'
+ r,msg,out=edit('DesertLinkData/ModMenu/Settings.dat',dat,sec,key,'F6');assert r and 'DesertLink' in msg and out==dat,(sec,r,msg)
 r,msg,out=edit('Duplicate.ini',b'[Menu]\nHotkey=F4\nHotkey=F5\n','Menu','Hotkey','F6');assert r
 # UTF-16 bytes cannot pass through c_char_p, so the editor is told to use the
 # file as it is (None). UTF-16 LE with a BOM is edited in place and stays

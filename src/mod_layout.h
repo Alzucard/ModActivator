@@ -1096,7 +1096,8 @@ static void drawPlacementSettings(const std::vector<Action> &actions, unsigned c
   }
 }
 
-// Settings -> Interface: the panel's size.
+// Settings -> Interface: the panel's size, and reading the mods' configs again.
+static ImRect lastRereadButton; // for the tests
 static void drawInterfaceSettings() {
   ImGui::SeparatorText("Size");
   settingLabel("UI size", "On top of the size your screen resolution gives the panel.");
@@ -1108,6 +1109,17 @@ static void drawInterfaceSettings() {
         settingsStatus = saveUiSize(percent) ? "Saved." : "Could not save the UI size.";
     ImGui::EndCombo();
   }
+
+  ImGui::SeparatorText("Mod configs");
+  if (ImGui::Button("Reread mod configs")) {
+    refreshRequested.store(true);
+    settingsStatus = "Reading the mods' configs again: the lists update when it is done.";
+  }
+  lastRereadButton = {ImGui::GetItemRectMin(), ImGui::GetItemRectMax()};
+  ImGui::TextWrapped("Reads every mod's INI and .dat files again, as opening this panel does, so a "
+                     "shortcut you changed in a mod's own menu shows here. A change made in a mod's "
+                     "own menu usually works in that mod at once. A config file edited any other "
+                     "way may need a restart of the game before the change takes effect.");
 }
 
 static int settingsPage = 0;

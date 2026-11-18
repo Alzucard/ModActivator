@@ -115,6 +115,9 @@ struct Action {
   // known-mods list's @reload: "live", or the key that makes it reread it.
   // Empty: only at the next start.
   std::string reload;
+  // Why the hotkey editor leaves this binding alone, from the known-mods
+  // list's @edit. Empty: it can be edited.
+  std::string noEdit;
   // Strings the menu derives from the fields above, filled on first use and
   // reused every frame after. Empty means not computed yet. The fields they
   // come from are not changed once an Action is shown.
@@ -337,8 +340,13 @@ static size_t bindingComment(const std::string &s, size_t start = 0) {
 }
 static bool standaloneDigit(const Action &a, const std::string &s) {
   const auto n = a.key.size();
+  // A modifier that is a key code in another setting (=Field, as with
+  // DesertLink's Key1 and Key2) makes this one a key code too.
+  auto rule = " " + a.modifierRule;
+  std::replace(rule.begin(), rule.end(), ',', ' ');
   const bool explicitVk = (n >= 2 && !_stricmp(a.key.c_str() + n - 2, "VK")) ||
-                          (n >= 7 && !_stricmp(a.key.c_str() + n - 7, "KeyCode"));
+                          (n >= 7 && !_stricmp(a.key.c_str() + n - 7, "KeyCode")) ||
+                          rule.find(" =") != rule.npos;
   // A standalone zero is commonly used to disable a shortcut.
   return !explicitVk && s.size() == 1 && s[0] >= '1' && s[0] <= '9';
 }
@@ -372,7 +380,14 @@ static std::vector<int> ruleModifiers(const Action &a) {
       char value[64]{};
       GetPrivateProfileStringA(a.section.c_str(), word.c_str() + 1, "", value, sizeof value,
                                config.c_str());
-      add(vk(value));
+      // A key there that is no modifier, or a name no key goes by, makes the
+      // binding invalid (0 is no key validShortcut accepts), rather than sent
+      // without that key. Empty, 0 and NONE are no modifier.
+      const int k = vk(value);
+      if (k ? k != VK_CONTROL && k != VK_SHIFT && k != VK_MENU
+            : *value && strcmp(value, "0") && _stricmp(value, "none"))
+        out.push_back(0);
+      add(k);
     } else if (const auto query = word.find('?'); query != word.npos) {
       if (GetPrivateProfileIntA(a.section.c_str(), word.c_str() + query + 1, 0, config.c_str()))
         add(vk(word.substr(0, query)));

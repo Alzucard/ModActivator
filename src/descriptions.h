@@ -97,7 +97,7 @@ static BindingInfo userInfo(const Action &action) {
 
 // --- 3. ModActivator.KnownMods.ini -------------------------------------------
 struct KnownBinding {
-  std::string section, key; // lower case; section empty for any, "x*" for a prefix
+  std::string section, key; // lower case; section empty for any, with one * for a pattern
   BindingInfo info;
   std::string modifiers; // Action::modifierRule, as written in the file
   std::string padField;  // the setting holding its controller combination, if not found by name
@@ -109,6 +109,9 @@ struct KnownMod {
   // @reload: "live" when the mod reads its config while the game runs, or the
   // key (Section/Key or Key, in the same file) that makes it read it again.
   std::string reload;
+  // @edit: why the hotkey editor leaves this file alone, said to you in its
+  // place. Empty: it can be edited.
+  std::string noEdit;
   std::vector<KnownBinding> bindings;
   // In the [@reserved] section only: keys something other than a mod uses
   // (Steam, Windows), as spelled in the file, with what uses them.
@@ -131,6 +134,32 @@ static std::vector<std::string> splitFields(const std::string &value, size_t cou
   return fields;
 }
 
+// A pattern's one * matches any run of characters: Shortcut.* every section
+// starting Shortcut., Shortcut.*.toggle those that also end .toggle.
+static bool sectionMatches(const std::string &pattern, const std::string &section) {
+  if (pattern.empty())
+    return true;
+  const auto star = pattern.find('*');
+  if (star == pattern.npos)
+    return pattern == section;
+  const size_t tail = pattern.size() - star - 1;
+  return section.size() >= star + tail && section.compare(0, star, pattern, 0, star) == 0 &&
+         section.compare(section.size() - tail, tail, pattern, star + 1, tail) == 0;
+}
+// The part of section a pattern's * matched; the whole section without a *.
+static std::string sectionWildcardPart(const std::string &pattern, const std::string &section) {
+  const auto star = pattern.find('*');
+  if (star == pattern.npos)
+    return section;
+  return section.substr(star, section.size() - (pattern.size() - 1));
+}
+// How specific a section pattern is: an exact section, then the pattern that
+// spells out more of it, then any section.
+static int sectionScore(const std::string &pattern) {
+  if (pattern.empty())
+    return 0;
+  return pattern.find('*') == pattern.npos ? 100000 : 1 + (int)pattern.size();
+}
 static KnownMods parseKnownMods(const std::string &text) {
   KnownMods mods;
   std::istringstream lines(text.compare(0, 3, "\xef\xbb\xbf") == 0 ? text.substr(3) : text);
@@ -157,6 +186,8 @@ static KnownMods parseKnownMods(const std::string &text) {
       mod.reserved.emplace_back(field, value);
     } else if (field == "@reload") {
       mod.reload = value;
+    } else if (field == "@edit") {
+      mod.noEdit = value;
     } else if (field == "@mod") {
       const auto parts = splitFields(value, 2);
       mod.name = parts[0];
@@ -175,6 +206,34 @@ static KnownMods parseKnownMods(const std::string &text) {
       if (!binding.key.empty())
         mod.bindings.push_back(std::move(binding));
     }
+  }
+  // An entry for one section takes what it leaves out (modifiers, what it
+  // does, the controller setting) from the most specific * entry covering
+  // it. One that says - for any of them takes nothing there: it has none.
+  const auto fields = [](KnownBinding &b) {
+    return std::vector<std::string *>{&b.modifiers, &b.padField, &b.info.description};
+  };
+  for (auto &mod : mods) {
+    for (auto &binding : mod.bindings) {
+      if (binding.section.empty() || binding.section.find('*') != binding.section.npos)
+        continue;
+      KnownBinding *general = nullptr;
+      for (auto &other : mod.bindings)
+        if (other.key == binding.key && other.section.find('*') != other.section.npos &&
+            sectionMatches(other.section, binding.section) &&
+            (!general || sectionScore(other.section) > sectionScore(general->section)))
+          general = &other;
+      if (!general)
+        continue;
+      const auto to = fields(binding), from = fields(*general);
+      for (size_t i = 0; i < to.size(); ++i)
+        if (to[i]->empty())
+          *to[i] = *from[i];
+    }
+    for (auto &binding : mod.bindings)
+      for (auto *field : fields(binding))
+        if (*field == "-")
+          field->clear();
   }
   return mods;
 }
@@ -195,7 +254,9 @@ static KnownMods loadKnownMods() {
   if (testsIgnoreKnownMods)
     return {};
 #endif
-  auto mods = parseKnownMods(builtInKnownMods);
+  // The built-in list never changes while the game runs: parsed once.
+  static const KnownMods builtIn = parseKnownMods(builtInKnownMods);
+  auto mods = builtIn;
   std::ifstream file(configPath("ModActivator.KnownMods.ini"), std::ios::binary);
   if (!file)
     return mods;
@@ -249,14 +310,7 @@ static const KnownMod *knownModFor(const KnownMods &mods, const Action &action) 
       return &mod;
   return nullptr;
 }
-static bool sectionMatches(const std::string &pattern, const std::string &section) {
-  if (pattern.empty())
-    return true;
-  if (pattern.back() == '*')
-    return section.compare(0, pattern.size() - 1, pattern, 0, pattern.size() - 1) == 0;
-  return pattern == section;
-}
-// The most specific entry: an exact section, then a prefix, then any section.
+// The most specific entry: an exact section, then a pattern, then any section.
 static const KnownBinding *knownBindingFor(const KnownMod &mod, const std::string &section,
                                            const std::string &key) {
   const KnownBinding *best = nullptr;
@@ -265,7 +319,7 @@ static const KnownBinding *knownBindingFor(const KnownMod &mod, const std::strin
   for (const auto &binding : mod.bindings) {
     if (binding.key != k || !sectionMatches(binding.section, sec))
       continue;
-    const int score = binding.section.empty() ? 0 : binding.section.back() == '*' ? 1 : 2;
+    const int score = sectionScore(binding.section);
     if (score > bestScore) {
       best = &binding;
       bestScore = score;
@@ -582,6 +636,7 @@ static void describeBinding(Action &action, DescriptionSources &sources,
     action.modAbout = mod->about;
     action.hexNumbers = mod->hexNumbers;
     action.reload = mod->reload;
+    action.noEdit = mod->noEdit;
   }
   if (binary && action.modName.empty())
     action.modName = binary->product;
@@ -627,7 +682,12 @@ static void describeBinding(Action &action, DescriptionSources &sources,
                                      {&user, sourceUser}}) {
     if (!info)
       continue;
-    if (!info->name.empty())
+    // A name of * is the part of the section the entry's * matched, or the
+    // whole section: Shortcut.* names [Shortcut.storage.open.private]
+    // storage.open.private.
+    if (known && info == &known->info && info->name == "*")
+      action.customName = displayText(sectionWildcardPart(known->section, action.section));
+    else if (!info->name.empty())
       action.customName = info->name;
     if (!info->description.empty()) {
       action.description = info->description;

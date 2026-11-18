@@ -321,6 +321,50 @@ extern "C" __declspec(dllexport) int ModActivatorSendTest() {
   return result;
 }
 
+// Settings > Interface > Reread mod configs asks for the mods' configs to be
+// read again, as Refresh does.
+extern "C" __declspec(dllexport) int ModActivatorRereadTest() {
+  if (!folder.empty())
+    return -1;
+  auto *context = ImGui::CreateContext();
+  auto &io = ImGui::GetIO();
+  io.DisplaySize = ImVec2(900, 600);
+  io.DeltaTime = 1.0f / 60;
+  io.IniFilename = nullptr;
+  unsigned char *pixels;
+  int width, height;
+  io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+  const auto frame = [] {
+    ImGui::NewFrame();
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(ImVec2(900, 600));
+    ImGui::Begin("Reread");
+    drawInterfaceSettings();
+    ImGui::End();
+    ImGui::Render();
+  };
+  refreshRequested.store(false);
+  lastRereadButton = {};
+  frame();
+  frame();
+  int result = 1;
+  if (lastRereadButton.GetWidth() > 0) {
+    result = refreshRequested.load() ? 2 : 0;
+    const ImVec2 centre = lastRereadButton.GetCenter();
+    io.AddMousePosEvent(centre.x, centre.y);
+    frame();
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    frame();
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    frame();
+    if (!result && !refreshRequested.exchange(false))
+      result = 3;
+  }
+  settingsStatus.clear();
+  ImGui::DestroyContext(context);
+  return result;
+}
+
 extern "C" __declspec(dllexport) int ModActivatorGroupsTest() {
   if (!folder.empty())
     return -1;
