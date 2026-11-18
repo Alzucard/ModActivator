@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.4.3
+- List the shortcuts you assign in **DesertLink's own menu** (its `[Shortcut.*]` entries) on DesertLink's card, as toggles and actions under DesertLink's own names, such as Cold Protection or Super Jump. One without a known name is shown by its raw name.
+- The Hotkeys editor leaves DesertLink's `Settings.dat` alone and says to change those shortcuts in DesertLink's menu: DesertLink writes the file back over from memory, so an edit made here would be lost.
+- New **Reread mod configs** button under Settings > Interface: reads every mod's INI and .dat files again, so a shortcut changed in a mod's own menu shows without reopening the panel.
+- A shortcut whose modifier setting names a key that is no modifier (or no key at all) is no longer listed or sent without it.
+
 ## 1.4.2
 - List **DesertLink All-in-One Mod Menu** (6.x) with its menu (Insert by default), Speedster mode and Instant conquest. It keeps its settings in `DesertLinkData\ModMenu\Settings.dat` instead of an INI, so it was never found.
 - Read settings from a `.dat` or `.cfg` file when it holds INI text (UTF-8 or UTF-16), and tie a config to its mod through two folders that spell the mod's name between them, such as `DesertLinkData\ModMenu` for `DesertLinkModMenu.asi`.
