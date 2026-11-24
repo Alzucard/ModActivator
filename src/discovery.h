@@ -111,8 +111,11 @@ static const std::string &cachedIdentity(const Action &a) {
 // file, so installing an update, which brings a fresh ModActivator.ini, never
 // replaces it. Created on the first save (or by migrateUserConfig, from what
 // older versions kept in ModActivator.ini).
-static std::string userConfigPath() { return configPath("ModActivator.User.ini"); }
-static std::string writableUserConfig() { return userConfigPath(); }
+static std::string userConfigPath() { return dataPath("ModActivator.User.ini"); }
+static std::string writableUserConfig() {
+  ensureDataFolder(); // the user file is in the ModActivator folder
+  return userConfigPath();
+}
 
 // Overrides belong to ModActivator, keyed by the config path, section and field.
 static int readBindingType(const Action &action) {

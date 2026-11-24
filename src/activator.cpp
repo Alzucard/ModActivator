@@ -35,13 +35,11 @@ static constexpr int settingsPreview = 65536, placementPreview = 1 << 20;
 // buttons beside Refresh.
 enum { viewTabs, viewHotkeys, viewSettings };
 static int panelView = viewTabs;
-// The plugin's folder (bin64), where the mods and their configs are.
+// The game's bin64, where the mods and their configs are.
 static std::string folder;
-// ModActivator's INI files (its settings, your choices and the known-mods
-// list) sit beside the plugin in bin64: DMM installs the files there but not
-// a release's subfolders. What ModActivator writes for itself, the log, goes
-// into a ModActivator folder inside bin64, created when needed.
-static std::string configPath(const char *name) { return folder + name; }
+// The plugin's folder when that is bin64\scripts, where the ASI loader finds
+// it; empty when the plugin sits in bin64 itself.
+static std::string scriptsFolder;
 // WrapSwapChain's value: 1 always hands the game's swapchain the wrapper, 0
 // never, -1 auto. A number counts by being zero or not, with anything after
 // it ignored, as the profile API's integer reading did; true/on/yes and
@@ -71,13 +69,26 @@ static int wrapSetting(const std::string &config) {
   GetPrivateProfileStringA("General", "WrapSwapChain", "auto", value, sizeof value, config.c_str());
   return wrapValue(value);
 }
+// All of ModActivator's own files (its settings, your choices, the log and
+// the cache) are in a ModActivator folder beside the plugin.
 static constexpr char dataFolderName[] = "ModActivator";
-static std::string dataPath(const char *name) {
-  return folder + dataFolderName + "\\" + name;
+static std::string dataFolder() {
+  return (scriptsFolder.empty() ? folder : scriptsFolder) + dataFolderName;
 }
+static std::string dataPath(const char *name) { return dataFolder() + "\\" + name; }
 // Before writing into the folder: it may not exist yet.
-static void ensureDataFolder() {
-  CreateDirectoryA((folder + dataFolderName).c_str(), nullptr);
+static void ensureDataFolder() { CreateDirectoryA(dataFolder().c_str(), nullptr); }
+// From the plugin's own folder, ending in a separator: in bin64\scripts the
+// mods are in its parent, anywhere else beside it.
+static void placeFolders(const std::string &own) {
+  const auto cut = own.find_last_of("\\/", own.size() - 2);
+  if (cut != own.npos && !_stricmp(own.substr(cut + 1, own.size() - cut - 2).c_str(), "scripts")) {
+    folder = own.substr(0, cut + 1);
+    scriptsFolder = own;
+  } else {
+    folder = own;
+    scriptsFolder.clear();
+  }
 }
 static std::atomic<unsigned long> configReads{0};
 
@@ -1398,7 +1409,7 @@ static DWORD WINAPI start(void *arg) {
   const DWORD selfLength = GetModuleFileNameW((HMODULE)arg, self, MAX_PATH);
   std::wstring selfFolder(self, selfLength < MAX_PATH ? selfLength : 0);
   selfFolder = selfFolder.substr(0, selfFolder.find_last_of(L"\\/") + 1);
-  folder = ansiFolder(selfFolder);
+  placeFolders(ansiFolder(selfFolder));
   if (folder.empty()) {
     // Nothing can be read or written beside the plugin. The log goes to the
     // working directory instead so the reason is on record.
@@ -1408,8 +1419,17 @@ static DWORD WINAPI start(void *arg) {
             "Move the game to a path with plain characters, or enable 8.3 names on that drive.");
     return 0;
   }
-  // Files older versions left in the wrong place move first: the INIs 1.3
-  // kept in the ModActivator folder back to bin64, and a log from before 1.3
+  // A second copy, such as an old one left in bin64 beside the one in
+  // bin64\scripts, would hook the game twice: the one loaded later stays out.
+  const std::wstring selfName(self + selfFolder.size());
+  if (GetModuleHandleW(selfName.c_str()) != (HMODULE)arg) {
+    ml::Log::Begin();
+    LOG_ERR("Mod Activator " MODACTIVATOR_VERSION " is loaded twice, and this copy does "
+            "nothing. Keep only bin64\\scripts\\ModActivator.asi and delete the other one.");
+    return 0;
+  }
+  // Files older versions left in the wrong place move first: the INIs 1.4.3
+  // kept in bin64 into the ModActivator folder, and a log from before 1.3
   // into the folder. The log opens after, and records the moves.
   const auto moved = relocateFiles();
   ml::Log::Begin();
@@ -1417,7 +1437,7 @@ static DWORD WINAPI start(void *arg) {
   for (const auto &line : moved)
     LOG("%s", line.c_str());
   loadLayout();
-  const auto config = configPath("ModActivator.ini");
+  const auto config = dataPath("ModActivator.ini");
   ml::Settings::Get().wrapSwapChain = wrapSetting(config);
   // Logged here as well as where the swapchain is decided, which a game whose
   // swapchain never reaches this mod does not get to.

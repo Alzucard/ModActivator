@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.4.4
+- **Install into `bin64\scripts`.** The release puts `ModActivator.asi` in `bin64\scripts` and its settings file, documentation and licences in `bin64\scripts\ModActivator`, where it also keeps your `ModActivator.User.ini`, the log and the mod cache. Mods and their configs are still found in `bin64` and the folders below it. A plugin left in `bin64` keeps its files in `bin64\ModActivator`.
+- Mod managers such as DMM, which install a release's files in `bin64` without its folders, are no longer supported.
+- Updating from 1.4.3: delete `bin64\ModActivator.asi`. The first start moves `ModActivator.User.ini` from `bin64` into the `ModActivator` folder and carries the `[General]` options of the old `bin64\ModActivator.ini` over (a `WrapSwapChain=0` too), renaming the old files `.moved`. Should two copies of `ModActivator.asi` be loaded, the later one does nothing and logs why.
+- A `ModActivator.KnownMods.ini` for trying entries is read from the `ModActivator` folder now, not from beside the plugin, and is no longer deleted there.
+
 ## 1.4.3
 - List the shortcuts you assign in **DesertLink's own menu** (its `[Shortcut.*]` entries) on DesertLink's card, as toggles and actions under DesertLink's own names, such as Cold Protection or Super Jump. One without a known name is shown by its raw name.
 - The Hotkeys editor leaves DesertLink's `Settings.dat` alone and says to change those shortcuts in DesertLink's menu: DesertLink writes the file back over from memory, so an edit made here would be lost.

@@ -139,6 +139,6 @@ It can also say things your config file cannot:
 - after those, the setting that holds the controller buttons, when its name does not give it away;
 - `Key = ignore` for a setting that only looks like a shortcut.
 
-To try an entry before sending it in, put it in a `ModActivator.KnownMods.ini` beside `ModActivator.asi` in `bin64`. That file is read on top of the built-in list, but only for config files the built-in list does not know (and for `[@reserved]` keys), so it cannot change an existing entry.
+To try an entry before sending it in, put it in a `ModActivator.KnownMods.ini` in `bin64\scripts\ModActivator`, beside `ModActivator.ini`. That file is read on top of the built-in list, but only for config files the built-in list does not know (and for `[@reserved]` keys), so it cannot change an existing entry.
 
 To be added, or to correct an entry, open an issue or a pull request at https://github.com/Alzucard/ModActivator with your mod's Nexus link and config file.

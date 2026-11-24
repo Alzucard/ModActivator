@@ -38,7 +38,7 @@ print('PASS: a leftover ReShade.ini without ReShade loaded is not listed.')
 # setting must not affect its classification.
 (root/'WikiFixture.ini').write_text('[Wiki]\n; Keyboard key to open/close the wiki\nToggleKey=F7\n')
 (root/'Opaque.ini').write_text('[Input]\n; Show the menu at startup\nStartupHint=1\nToggleKey=F6\n')
-(root/'ModActivator').mkdir(exist_ok=True);(root/'ModActivator.User.ini').write_text('')
+(root/'ModActivator').mkdir(exist_ok=True);(root/'ModActivator/ModActivator.User.ini').write_text('')
 toggle_scan = fn
 fn = m.ModActivatorDiscoveryTest
 assert 'WikiFixture.asi|WikiFixture.ini|Wiki|ToggleKey|118,' in scan(root,'WikiFixture.asi')
@@ -46,13 +46,13 @@ assert scan(root,'Opaque.asi') == ''
 fn = toggle_scan
 assert 'Opaque.asi|Opaque.ini|Input|ToggleKey|117,' in scan(root,'Opaque.asi')
 assert scan(root,'WikiFixture.asi') == ''
-(root/'ModActivator.User.ini').write_text('[BindingTypes]\nopaque.ini|input|togglekey=1\nwikifixture.ini|wiki|togglekey=2\n')
+(root/'ModActivator/ModActivator.User.ini').write_text('[BindingTypes]\nopaque.ini|input|togglekey=1\nwikifixture.ini|wiki|togglekey=2\n')
 assert 'WikiFixture.asi' in scan(root,'WikiFixture.asi')
 assert scan(root,'Opaque.asi') == ''
 fn = m.ModActivatorDiscoveryTest
 assert 'Opaque.asi' in scan(root,'Opaque.asi')
 assert scan(root,'WikiFixture.asi') == ''
-(root/'ModActivator.User.ini').write_text('[BindingTypes]\nopaque.ini|input|togglekey=3\n')
+(root/'ModActivator/ModActivator.User.ini').write_text('[BindingTypes]\nopaque.ini|input|togglekey=3\n')
 assert scan(root,'Opaque.asi') == ''
 fn = toggle_scan
 assert scan(root,'Opaque.asi') == ''
@@ -61,7 +61,7 @@ print('PASS: nearby comments, ambiguous names, and persisted binding-type overri
 # DesertLink's all-in-one menu keeps its INI text, UTF-16 with a BOM, in
 # DesertLinkData/ModMenu/Settings.dat: no .ini, and no folder named like the
 # mod. A .dat that is not INI text is never read as settings.
-(root/'ModActivator.User.ini').write_text('')
+(root/'ModActivator/ModActivator.User.ini').write_text('')
 menu=root/'DesertLinkData'/'ModMenu';menu.mkdir(parents=True,exist_ok=True)
 (menu/'Settings.dat').write_bytes('\r\n[EditorPanel]\r\nOpenKeyVk=NONE\r\nOpenKey2Vk=113\r\nOpenKey2WithVk=16\r\n[FlashControls]\r\nToggleKey=F10\r\n[General]\r\nOpenKeyVk=45\r\n'.encode('utf-16'))
 (menu/'recovery.dat').write_bytes(b'\x00\x01[General]\nOpenKeyVk=46\n')

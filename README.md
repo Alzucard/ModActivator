@@ -19,26 +19,27 @@ The panel uses a charcoal-and-gold theme with larger text, searchable mod cards,
 
 ## Install
 
-Close Crimson Desert. Extract `ModActivator-<version>.zip` into the game's folder (the one that holds `bin64`), or install it with a mod manager such as DMM. That puts `ModActivator.asi` and `ModActivator.ini` in `bin64`, beside `CrimsonDesert.exe`. An ASI loader is required.
+Close Crimson Desert. Extract `ModActivator-<version>.zip` into the game's folder (the one that holds `bin64`). That puts `ModActivator.asi` in `bin64\scripts` and everything else of ModActivator's in `bin64\scripts\ModActivator`. An ASI loader that loads from `scripts` is required. Mod managers such as DMM, which put a release's files in `bin64` without its folders, are not supported.
 
 ```
 bin64\
-  ModActivator.asi                 the plugin; the ASI loader only looks here
-  ModActivator.ini                 options
-  ModActivator.User.ini            your menu choices, created when you first save one
-  ModActivator\
-    ModActivator.log               this session's log (and .log.old, the last one)
-    ModActivator.ModCache.bin      what each mod's file said, safe to delete
-    README.md, LICENSE, ...        documentation and licences (manual installs)
+  scripts\
+    ModActivator.asi               the plugin, where the ASI loader finds it
+    ModActivator\
+      ModActivator.ini             options
+      ModActivator.User.ini        your menu choices, created when you first save one
+      ModActivator.log             this session's log (and .log.old, the last one)
+      ModActivator.ModCache.bin    what each mod's file said, safe to delete
+      README.md, LICENSE, ...      documentation and licences
 ```
 
-The INI files sit in `bin64` itself because DMM installs a release's files there but not its subfolders. ModActivator creates the `ModActivator` folder for its log if it is missing.
+ModActivator still finds your mods and their configs in `bin64` and the folders below it.
 
-Updating from 1.3.0 or 1.3.1, which kept the INI files in the `ModActivator` folder: install as above. The first start moves your `ModActivator.User.ini` back to `bin64`, carries the `[General]` options you set into the new `ModActivator.ini`, renames the old one `ModActivator.ini.moved`, and removes the old known-mods list. The log says what was moved.
+Updating from 1.3.2 to 1.4.3, which kept the plugin and its INI files in `bin64`: delete `bin64\ModActivator.asi` and install as above. The first start moves your `ModActivator.User.ini` from `bin64` into `bin64\scripts\ModActivator`, carries the `[General]` options you set into the new `ModActivator.ini` and renames the old one `ModActivator.ini.moved`. The log says what was moved. Should the old `ModActivator.asi` still be in `bin64`, one of the two copies does nothing and its log says so. The old `bin64\ModActivator` folder can be deleted.
 
 Launch the game and press **Ctrl+Shift+Backspace**.
 
-Everything you set in the menu (the panel shortcut, binding types, tabs, card order, and your names and notes) is saved in `ModActivator.User.ini`. No release includes that file, so updating, by hand or with a mod manager, never replaces it, and the new `ModActivator.ini` can simply overwrite the old one. Versions before this kept those choices in `ModActivator.ini`. The first start of this version copies them over once and says so in the log.
+Everything you set in the menu (the panel shortcut, binding types, tabs, card order, and your names and notes) is saved in `ModActivator.User.ini`. No release includes that file, so updating never replaces it, and the new `ModActivator.ini` can simply overwrite the old one. Versions before this kept those choices in `ModActivator.ini`. The first start of this version copies them over once and says so in the log.
 
 With ReShade 6.8.0 or newer, ModActivator draws through ReShade's add-on callbacks, after ReShade's effects and overlay. With an older ReShade it falls back to the legacy DirectX path automatically. Set `UseReShadeEvents=0` under `[General]` to always use the legacy path. On the legacy path, `WrapSwapChain=auto` (the default) draws the menu before DLSS frame generation whenever the game loads it, `1` always does that and `0` never does. Alongside Crimson Route, which breaks when the swapchain is wrapped, it never is. Set `HookXInput=0` if the controller should keep reaching the game while the menu is open.
 
@@ -54,7 +55,7 @@ Each binding's name and description come from the most trustworthy source that h
 
 1. **Your own name and note.** Select a binding in **Hotkeys**, fill in **Name** and **Note**, and click **Save name and note**. They take effect at once and are saved in `ModActivator.User.ini`, so updating ModActivator or the mod never replaces them. **Clear mine** goes back to the other sources.
 2. **The mod itself**, for mods that describe their shortcuts to ModActivator (see below).
-3. **The known-mods list**, built into `ModActivator.asi` (its source is `data/ModActivator.KnownMods.ini`): what the shortcuts of about 50 popular Crimson Desert mods do, written from their Nexus Mods pages and config files. It also tells ModActivator about settings whose names do not look like shortcuts (and ones that only look like shortcuts), about mods that write key codes in hexadecimal, and about modifiers a mod keeps in a setting of its own, such as Gilded Compass's `HotkeyCtrl=1`, so the full combination is sent. It is built into the plugin because DMM does not install it as a file of its own, and it is replaced with every update; put your own changes in your notes instead. A `ModActivator.KnownMods.ini` beside the plugin is still read, but only adds config files the built-in list does not know, and reserved keys.
+3. **The known-mods list**, built into `ModActivator.asi` (its source is `data/ModActivator.KnownMods.ini`): what the shortcuts of about 50 popular Crimson Desert mods do, written from their Nexus Mods pages and config files. It also tells ModActivator about settings whose names do not look like shortcuts (and ones that only look like shortcuts), about mods that write key codes in hexadecimal, and about modifiers a mod keeps in a setting of its own, such as Gilded Compass's `HotkeyCtrl=1`, so the full combination is sent. It is built into the plugin and replaced with every update; put your own changes in your notes instead. A `ModActivator.KnownMods.ini` in `bin64\scripts\ModActivator` is still read, but only adds config files the built-in list does not know, and reserved keys.
 4. **The comment** beside the setting in the mod's config file, or **the mod's own file** (`.asi` or `.addon64`), when it carries the default config it writes or a settings schema with a label and help text for the setting. ModActivator only reads the file, it never runs anything from it, and this works for mods it has never heard of. The file's version information also names the mod when nothing else does. What a mod's file said is kept in `ModActivator\ModActivator.ModCache.bin`, so each file is read once and again only when the mod is new or updated (its size or date changed) or ModActivator itself is updated.
 5. **A readme** next to the mod's config file: a `.txt` or `.md` file named `readme…` or after the mod.
 6. **A sentence in the mod's own file** that names the setting, such as a log message. Error messages are skipped.
@@ -125,7 +126,7 @@ Automated checks cover parsing, discovery, config editing and preservation, back
 
 ## Uninstall
 
-With the game closed, remove `ModActivator.asi`, `ModActivator.ini` and the `ModActivator` folder from `bin64` (and a `ModActivator.KnownMods.ini`, which versions 1.3.2 to 1.3.4 put there). Keep `ModActivator.User.ini` if you might reinstall and want your menu settings back. Restore edited configs from their backups if needed; uninstalling does not undo previous hotkey edits.
+With the game closed, remove `ModActivator.asi` and the `ModActivator` folder from `bin64\scripts` (and from `bin64` any `ModActivator.asi`, `ModActivator.ini`, `ModActivator.KnownMods.ini` and `ModActivator` folder older versions put there). Keep `ModActivator\ModActivator.User.ini` if you might reinstall and want your menu settings back. Restore edited configs from their backups if needed; uninstalling does not undo previous hotkey edits.
 
 ## Credits
 

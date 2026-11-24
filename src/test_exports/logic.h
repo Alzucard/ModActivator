@@ -186,15 +186,16 @@ ModActivatorSettingsTest(const char *root) {
   refreshRequested.store(false);
   return result;
 }
-// The move of the menu's choices out of ModActivator.ini, and of 1.3's INIs
-// out of the ModActivator folder back to bin64. root is an empty folder; each
-// case writes its own ModActivator.ini.
+// The move of the menu's choices out of ModActivator.ini, and of 1.4.3's INIs
+// out of bin64 into the ModActivator folder beside the plugin, in bin64 and in
+// bin64\scripts. root is an empty folder; each case writes its own
+// ModActivator.ini.
 extern "C" __declspec(dllexport) int ModActivatorMigrationTest(const char *root) {
   if (!folder.empty() || !root)
     return -1;
   folder = root;
   ensureDataFolder();
-  const auto old = configPath("ModActivator.ini"), user = userConfigPath();
+  const auto old = dataPath("ModActivator.ini"), user = userConfigPath();
   const auto exists = [](const std::string &p) {
     return GetFileAttributesA(p.c_str()) != INVALID_FILE_ATTRIBUTES;
   };
@@ -241,39 +242,35 @@ extern "C" __declspec(dllexport) int ModActivatorMigrationTest(const char *root)
         readBindingType(probe) != 3)
       return 7;
 
-    // A 1.3 install: the INIs in the ModActivator folder, where DMM never put
-    // them, and a log from before 1.3 still in bin64. All of it moves.
+    // A 1.4.3 install: the INIs in bin64 beside the plugin, and a log from
+    // before 1.3 still in bin64. All of it moves into the folder.
     for (const char *name : {"ModActivator.ini", "ModActivator.User.ini"})
-      DeleteFileA(configPath(name).c_str());
-    const auto folderIni = dataPath("ModActivator.ini"), folderUser = dataPath("ModActivator.User.ini"),
-               folderKnown = dataPath("ModActivator.KnownMods.ini"),
-               known = configPath("ModActivator.KnownMods.ini");
-    std::ofstream(folderIni) << "[General]\nHookXInput=0\n";
-    std::ofstream(folderUser) << "[BindingTypes]\nmod.ini|menu|hotkey=2\n";
-    std::ofstream(folderKnown) << "[mod.ini]\n";
+      DeleteFileA(dataPath(name).c_str());
+    const auto binIni = folder + "ModActivator.ini", binUser = folder + "ModActivator.User.ini";
+    std::ofstream(binIni) << "[General]\nHookXInput=0\n";
+    std::ofstream(binUser) << "[BindingTypes]\nmod.ini|menu|hotkey=2\n";
     std::ofstream(folder + "ModActivator.log") << "old log\n";
     auto moved = relocateFiles();
-    if (exists(folderIni) || exists(folderUser) || exists(folderKnown) || exists(known) ||
-        exists(folder + "ModActivator.log") || !exists(dataPath("ModActivator.log")) ||
+    if (exists(binIni) || exists(binUser) || exists(folder + "ModActivator.log") ||
+        !exists(dataPath("ModActivator.log")) ||
         GetPrivateProfileIntA("General", "HookXInput", 1, old.c_str()) != 0 ||
-        readBindingType(probe) != 2 || moved.size() != 4)
+        readBindingType(probe) != 2 || moved.size() != 3)
       return 8;
-    // An update brought fresh INIs into bin64 while the folder still has the
-    // 1.3 ones: your options carry over, the shipped comments stay, your
-    // bin64 choices win, and the old files are renamed or removed, once.
+    // An update brought fresh INIs into the folder while bin64 still has the
+    // 1.4.3 ones: your options carry over, the shipped comments stay, the
+    // folder's choices win, and the old files are renamed, once.
     std::ofstream(old) << "[General]\n; shipped comment\nHookXInput=1\nUseReShadeEvents=1\n";
-    std::ofstream(folderIni) << "[General]\nHookXInput=0\nWrapSwapChain = 0 ; the old default\n";
-    std::ofstream(folderUser) << "[BindingTypes]\nmod.ini|menu|hotkey=1\n";
-    std::ofstream(folderKnown) << "[old.ini]\n";
+    std::ofstream(binIni) << "[General]\nHookXInput=0\nWrapSwapChain = 0 ; yours\n";
+    std::ofstream(binUser) << "[BindingTypes]\nmod.ini|menu|hotkey=1\n";
     relocateFiles();
     std::ifstream fresh(old);
     const std::string text(std::istreambuf_iterator<char>(fresh), {});
     fresh.close();
-    if (exists(folderIni) || !exists(folderIni + ".moved") || exists(folderUser) ||
-        !exists(folderUser + ".moved") || exists(folderKnown) || readBindingType(probe) != 2 ||
+    if (exists(binIni) || !exists(binIni + ".moved") || exists(binUser) ||
+        !exists(binUser + ".moved") || readBindingType(probe) != 2 ||
         GetPrivateProfileIntA("General", "HookXInput", 1, old.c_str()) != 0 ||
         GetPrivateProfileIntA("General", "UseReShadeEvents", 0, old.c_str()) != 1 ||
-        text.find("; shipped comment") == text.npos || wrapSetting(old) != -1)
+        text.find("; shipped comment") == text.npos || wrapSetting(old) != 0)
       return 9;
     // WrapSwapChain: auto unless it says 1 or 0.
     for (const auto &[value, want] : std::vector<std::pair<const char *, int>>{
@@ -288,9 +285,33 @@ extern "C" __declspec(dllexport) int ModActivatorMigrationTest(const char *root)
     if (!relocateFiles().empty() ||
         GetPrivateProfileIntA("General", "HookXInput", 0, old.c_str()) != 1)
       return 10;
+
+    // The plugin in bin64\scripts: the mods are still read from bin64, and
+    // ModActivator's own files are in scripts\ModActivator, where 1.4.3's
+    // INIs from bin64 move.
+    const std::string bin64 = folder, scripts = bin64 + "Scripts\\";
+    CreateDirectoryA(scripts.c_str(), nullptr);
+    placeFolders(scripts);
+    if (folder != bin64 || scriptsFolder != scripts ||
+        dataPath("ModActivator.ini") != scripts + "ModActivator\\ModActivator.ini")
+      return 12;
+    DeleteFileA((binIni + ".moved").c_str());
+    DeleteFileA((binUser + ".moved").c_str());
+    std::ofstream(binIni) << "[General]\nHookXInput=0\n";
+    std::ofstream(binUser) << "[BindingTypes]\nmod.ini|menu|hotkey=3\n";
+    ensureDataFolder();
+    if (relocateFiles().size() != 2 || exists(binIni) || exists(binUser) ||
+        GetPrivateProfileIntA("General", "HookXInput", 1, dataPath("ModActivator.ini").c_str()) != 0 ||
+        readBindingType(probe) != 3)
+      return 13;
+    // Any other folder is bin64 itself.
+    placeFolders(bin64 + "Other\\");
+    if (folder != bin64 + "Other\\" || !scriptsFolder.empty())
+      return 14;
     return 0;
   }();
   folder.clear();
+  scriptsFolder.clear();
   opener.store(defaultOpener);
   modLayout = {};
   ++layoutVersion;
@@ -611,7 +632,7 @@ extern "C" __declspec(dllexport) int ModActivatorControllerTest(const char *root
   folder = root;
   const int result = [&] {
     ensureDataFolder();
-    const auto user = userConfigPath(), shipped = configPath("ModActivator.ini");
+    const auto user = userConfigPath(), shipped = dataPath("ModActivator.ini");
     const auto loaded = [&](const char *mine, const char *theirs) {
       WritePrivateProfileStringA("General", "PadOpenShortcut", mine, user.c_str());
       WritePrivateProfileStringA("General", "PadOpenShortcut", theirs, shipped.c_str());
@@ -760,9 +781,10 @@ extern "C" __declspec(dllexport) int ModActivatorKnownModsTest(const char *root)
     return false;
   };
   const int result = [&] {
-    const auto path = configPath("ModActivator.KnownMods.ini");
+    ensureDataFolder();
+    const auto path = dataPath("ModActivator.KnownMods.ini");
     DeleteFileA(path.c_str());
-    // No file at all, as DMM installs it: the built-in list is all there.
+    // No file at all: the built-in list is all there.
     auto mods = loadKnownMods();
     auto route = has(mods, "crimsonroute.ini");
     if (route == mods.end() || route->name != "Crimson Route" || !reserved(mods, "Steam: screenshot (default key)"))
@@ -804,7 +826,7 @@ extern "C" __declspec(dllexport) int ModActivatorRadialTest(const char *root) {
   const int result = [&] {
     const auto user = userConfigPath();
     DeleteFileA(user.c_str());
-    DeleteFileA(configPath("ModActivator.ini").c_str());
+    DeleteFileA(dataPath("ModActivator.ini").c_str());
     // Defaults: the key left of 1, LB + RB + Up, the game keeps running.
     loadRadial();
     const unsigned grave = radialKeyCode();

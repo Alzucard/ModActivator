@@ -10,7 +10,7 @@ m = ctypes.WinDLL(str(pathlib.Path('build/ModActivator-tests.asi').resolve()))
 fn = m.ModActivatorCatalogTest
 fn.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int]
 
-(root / 'ModActivator.KnownMods.ini').write_text(
+(root / 'ModActivator/ModActivator.KnownMods.ini').write_text(
     '[@reserved]\n'
     'F12 = Steam: screenshot\n'
     'Alt+F4 = Windows: close the game\n'
@@ -22,7 +22,7 @@ fn.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int]
     '[Linked.ini]\n'
     'Jump = action | Jump | Its controller button is in a setting the list names. | | MyPad\n',
     encoding='utf-8')
-(root / 'ModActivator.User.ini').write_text(
+(root / 'ModActivator/ModActivator.User.ini').write_text(
     '[BindingTypes]\nguess.ini|menu|togglekey=2\n'
     '[ReservedKeys]\nI = Game: inventory\n')
 (root / 'Storage.ini').write_text('[Keys]\nOpen=F2\nDresser=F3\nGhost=F9\nMark=F11\n')
@@ -127,3 +127,13 @@ tmp.mkdir()
 result = radial((str(tmp) + chr(92)).encode())
 assert result == 0, f'radial check failed at step {result}'
 print('PASS: the radial menu: wedge directions, pinning eight in order, its settings, and the byte search.')
+
+# The release archive: the plugin in bin64/scripts, where the ASI loader
+# finds it, and everything else of ModActivator's in scripts/ModActivator.
+import zipfile
+version = pathlib.Path('VERSION').read_text(encoding='utf-8').strip()
+names = set(zipfile.ZipFile(f'dist/ModActivator-{version}.zip').namelist())
+assert {'bin64/scripts/ModActivator.asi', 'bin64/scripts/ModActivator/ModActivator.ini',
+        'bin64/scripts/ModActivator/README.md'} <= names, sorted(names)
+assert all(n.startswith('bin64/scripts/') for n in names), sorted(names)
+print('PASS: the release puts ModActivator.asi in bin64/scripts and its files in scripts/ModActivator.')

@@ -32,8 +32,8 @@ sources = (sorted((base / 'src').rglob('*.cpp'))
            + sorted(minhook.glob('*.c')) + [minhook / 'hde/hde64.c'])
 # Sources holding test entry points; compiled a second time for the test build.
 with_tests = {base / 'src/activator.cpp', base / 'src/hooks/input.cpp'}
-# The known-mods list is compiled into the plugin: DMM does not install it
-# as a file of its own. data/ModActivator.KnownMods.ini is the source.
+# The known-mods list is compiled into the plugin, so every install has it.
+# data/ModActivator.KnownMods.ini is the source.
 generated = obj / 'generated'
 generated.mkdir(exist_ok=True)
 known_mods = (base / 'data/ModActivator.KnownMods.ini').read_text(encoding='utf-8')
@@ -95,21 +95,18 @@ def link(path, tests):
 link(out / 'ModActivator.asi', False)
 link(obj / 'ModActivator-tests.asi', True)
 
-# dist/ mirrors bin64: the plugin and its settings file at the top, where
-# the ASI loader and DMM put them (DMM does not install a release's
-# subfolders), and the documentation and licences in a ModActivator folder
-# beside them, for manual installs. ModActivator writes its log into that
-# folder too. The known-mods list is inside the plugin (see above).
-for name in ['README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'CHANGELOG.md']:
+# dist/ mirrors bin64\scripts: the plugin at the top, where the ASI loader
+# finds it, and its settings file, the documentation and the licences in a
+# ModActivator folder beside it. ModActivator writes its log and your choices
+# into that folder too. The known-mods list is inside the plugin (see above).
+for name in ['README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'CHANGELOG.md',
+             'ModActivator.ini', 'ModActivator.KnownMods.ini']:
     (out / name).unlink(missing_ok=True)
 for name in ['include', 'licenses', 'ModActivator']:
     shutil.rmtree(out / name, ignore_errors=True)
-inis = [base / 'ModActivator.ini']
-(out / 'ModActivator.KnownMods.ini').unlink(missing_ok=True)
-for ini in inis:
-    shutil.copy2(ini, out / ini.name)
 data = out / 'ModActivator'
 data.mkdir()
+shutil.copy2(base / 'ModActivator.ini', data / 'ModActivator.ini')
 # The export header is not part of the mod: ModActivator never reads it. Mod
 # authors get it in the modder kit below.
 # Distributable documentation and required third-party notices.
@@ -137,16 +134,14 @@ print('Built ' + str(obj / 'BinaryMod.asi') + ' and ' + str(obj / 'BinaryToggle.
 
 # The two release archives, named for VERSION.
 #   ModActivator-<version>.zip            the mod, laid out from the game folder
-#                                         (bin64\...), as users and DMM install it
+#                                         (bin64\scripts\...), as users install it
 #   ModActivator-<version>-ModderKit.zip  for mod authors: the export header,
 #                                         the guide and the example mod
 version = (base / 'VERSION').read_text(encoding='utf-8').strip()
 with zipfile.ZipFile(out / f'ModActivator-{version}.zip', 'w', zipfile.ZIP_DEFLATED) as z:
-    z.write(out / 'ModActivator.asi', 'bin64/ModActivator.asi')
-    for ini in inis:
-        z.write(out / ini.name, 'bin64/' + ini.name)
+    z.write(out / 'ModActivator.asi', 'bin64/scripts/ModActivator.asi')
     for path in sorted(p for p in data.rglob('*') if p.is_file()):
-        z.write(path, 'bin64/ModActivator/' + path.relative_to(data).as_posix())
+        z.write(path, 'bin64/scripts/ModActivator/' + path.relative_to(data).as_posix())
 with zipfile.ZipFile(out / f'ModActivator-{version}-ModderKit.zip', 'w', zipfile.ZIP_DEFLATED) as z:
     z.write(base / 'docs/MODDERS.md', 'README.md')
     z.write(base / 'include/ModActivatorBindings.h', 'include/ModActivatorBindings.h')

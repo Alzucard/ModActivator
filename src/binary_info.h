@@ -712,7 +712,7 @@ inline std::map<std::wstring, Entry> parse(const std::string &data) {
 inline std::string file() {
   if (folder.empty())
     return {};
-  const DWORD attributes = GetFileAttributesA((folder + dataFolderName).c_str());
+  const DWORD attributes = GetFileAttributesA(dataFolder().c_str());
   if (attributes == INVALID_FILE_ATTRIBUTES || !(attributes & FILE_ATTRIBUTE_DIRECTORY))
     return {};
   return dataPath("ModActivator.ModCache.bin");
